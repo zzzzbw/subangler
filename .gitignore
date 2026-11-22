@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 运行时数据（含密钥与凭证，绝不进 git）
+config/*.db
+config/*.db-wal
+config/*.db-shm
+config/secret.key
+config/*.log
+*.state.dbm
+config/*.dbm
+
+# 环境变量实文件（.env.example 是模板，可提交）
+.env
+.env.*
+!.env.example
+
+# Node / 前端中间产物
+node_modules/
+web/node_modules/
+web/tsconfig.tsbuildinfo
+
+# 前端构建产物（由构建期生成，index.html 由 Vite 覆盖故也忽略）
+src/subangler/static/assets/
+src/subangler/static/index.html
+
+# 临时验证产物与截图（含用户提供的排障截图）
+.ui-verify/
+Snipaste_*.png
+*.png
+
+# 根目录临时数据库（验收/测试生成）
+/*.db
+/*.db-wal
+/*.db-shm
+secret.key
+
+# 工作记忆与本地会话数据
+.workbuddy/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

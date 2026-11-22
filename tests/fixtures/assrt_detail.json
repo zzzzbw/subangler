@@ -1,0 +1,17 @@
+{
+  "status": 0,
+  "sub": {
+    "subs": [
+      {
+        "id": 684213,
+        "filename": "Furious.S01E01.zh.srt.rar",
+        "size": 51200,
+        "url": "https://file0.assrt.net/download/684213/archive.rar?api=1",
+        "filelist": [
+          {"f": "Furious.S01E01.zh.srt", "s": "50KB", "url": "https://file0.assrt.net/onthefly/684213/-/1/Furious.S01E01.zh.srt?api=1"}
+        ],
+        "lang": {"desc": "简 双语", "langlist": {"langdou": true}}
+      }
+    ]
+  }
+}

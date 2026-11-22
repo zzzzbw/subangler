@@ -1,0 +1,38 @@
+services:
+  subangler:
+    build: .
+    image: subangler:0.1.0
+    container_name: subangler
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      TZ: Asia/Shanghai
+      PUID: "1000"
+      PGID: "1000"
+      SUBANGLER_DB_PATH: /app/config/subangler.db
+      SUBANGLER_LOG_LEVEL: INFO
+      # 首次引导管理员；服务启动后请到 Web 设置页修改密码
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-on-first-login}
+    volumes:
+      - ./config:/app/config
+      # NAS 媒体库路径：字幕需回写同目录，必须 rw；PUID/PGID 对齐 NAS 属主
+      - ${MEDIA_ROOT:-/volume1/tvshows}:/media/tvshows:rw
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8765/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # 可选 sidecar：Zimuku 的 JS 挑战需要。默认注释，按需取消注释。
+  # flaresolverr:
+  #   image: ghcr.io/flaresolverr/flaresolverr:latest
+  #   container_name: flaresolverr
+  #   restart: unless-stopped
+  #   environment:
+  #     TZ: Asia/Shanghai
+  #     LOG_LEVEL: info
+  #   ports:
+  #     - "8191:8191"

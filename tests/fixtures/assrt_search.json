@@ -1,0 +1,32 @@
+{
+  "status": 0,
+  "sub": {
+    "subs": [
+      {
+        "id": 684213,
+        "native_name": "狂怒追缉/Furious S01E01",
+        "videoname": "Furious.S01E01.1080p.WEB-DL.x264",
+        "revision": 0,
+        "subtype": "Subrip(srt)",
+        "upload_time": "2026-11-20 10:00:00",
+        "vote_score": 12,
+        "size": 51200,
+        "lang": {"desc": "简 双语", "langlist": {"langdou": true, "langchi": true}},
+        "release_site": "测试组"
+      },
+      {
+        "id": 684214,
+        "native_name": "狂怒追缉/Furious S01E02",
+        "videoname": "Furious.S01E02.720p.WEB-DL.x264",
+        "revision": 0,
+        "subtype": "Subrip(srt)",
+        "vote_score": 3,
+        "size": 40000,
+        "lang": {"desc": "英", "langlist": {"langeng": true}},
+        "release_site": "测试组"
+      }
+    ],
+    "action": "search",
+    "result": "succeed"
+  }
+}

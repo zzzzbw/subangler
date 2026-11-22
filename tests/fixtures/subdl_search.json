@@ -1,0 +1,24 @@
+{
+  "status": true,
+  "results": [{"sd_id": 1234, "type": "tv", "name": "Furious", "year": 2026, "imdb_id": "tt36303968"}],
+  "subtitles": [
+    {
+      "n_id": "abc123",
+      "release_name": "Furious.S01E01.1080p.WEB-DL.x264-GROUP",
+      "lang": "english",
+      "fps": 23.976,
+      "hi": false,
+      "format": "srt",
+      "size": 48000,
+      "url": "https://dl.subdl.com/subtitle/1234-abc123.srt"
+    },
+    {
+      "n_id": "def456",
+      "release_name": "Furious.S01E02.1080p.WEB-DL.x264-GROUP",
+      "lang": "english",
+      "fps": 23.976,
+      "size": 46000,
+      "url": "https://dl.subdl.com/subtitle/1234-def456.srt"
+    }
+  ]
+}
