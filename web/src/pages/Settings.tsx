@@ -81,6 +81,18 @@ export default function Settings({ push }: { push: ToastPush }) {
     }
   }
 
+  async function testFlare(key: string) {
+    const url = String(draft[key] || '')
+    setTestState((s) => ({ ...s, [key]: '检测中…' }))
+    try {
+      const r = await api.post<{ ok: boolean; detail: string }>('/api/config/test-flaresolverr', { url })
+      setTestState((s) => ({ ...s, [key]: r.ok ? `✓ ${r.detail}` : `✗ ${r.detail}` }))
+      push(r.ok ? `FlareSolverr 可用：${r.detail}` : `FlareSolverr 不可用：${r.detail}`, r.ok ? 'ok' : 'error')
+    } catch (e) {
+      setTestState((s) => ({ ...s, [key]: `✗ ${(e as Error).message}` }))
+    }
+  }
+
   async function exportConfig() {
     try {
       const data = await api.get<Record<string, unknown>>('/api/config/export')
@@ -141,7 +153,8 @@ export default function Settings({ push }: { push: ToastPush }) {
                     onChange={(v) => setField(item.key, v)}
                     testProvider={credentialTestMap[item.key]}
                     testState={testState[item.key]}
-                    onTest={() => testCredential(credentialTestMap[item.key], item.key)} />
+                    onTest={() => testCredential(credentialTestMap[item.key], item.key)}
+                    onTestFlare={item.key === 'providers.flaresolverr_url' ? () => testFlare(item.key) : undefined} />
                 ))}
               </div>
             )}
@@ -190,9 +203,10 @@ export default function Settings({ push }: { push: ToastPush }) {
   )
 }
 
-function ConfigField({ item, value, revealed, onReveal, onChange, testProvider, testState, onTest }: {
+function ConfigField({ item, value, revealed, onReveal, onChange, testProvider, testState, onTest, onTestFlare }: {
   item: ConfigItem; value: unknown; revealed: boolean; onReveal: () => void
   onChange: (v: unknown) => void; testProvider?: string; testState?: string; onTest: () => void
+  onTestFlare?: () => void
 }) {
   const hideValue = item.sensitive && !revealed && item.masked
   let control: React.ReactNode
@@ -218,6 +232,15 @@ function ConfigField({ item, value, revealed, onReveal, onChange, testProvider, 
         <button className="btn btn-sm btn-ghost" onClick={onReveal}>{revealed ? '隐藏' : '显示'}</button>
         {testProvider && <button className="btn btn-sm" onClick={onTest}>测试连接</button>}
         {testState && <span className={`test-result ${testState.startsWith('✓') ? 'ok' : 'error'}`}>{testState}</span>}
+      </div>
+    )
+  } else if (onTestFlare) {
+    // FlareSolverr 地址：检测按钮仅提示可用性，不拦截保存。
+    control = (
+      <div className="row-gap">
+        <input className="config-input" value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} placeholder="http://192.168.2.15:8191" />
+        <button className="btn btn-sm" onClick={onTestFlare} disabled={testState === '检测中…'}>检测</button>
+        {testState && <span className={`test-result ${testState.startsWith('✓') ? 'ok' : testState === '检测中…' ? '' : 'error'}`}>{testState}</span>}
       </div>
     )
   } else {

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from ...auth import require_user
 from ...config import DEFAULTS, ConfigError, get_config_store
+from ...doctor import probe_flaresolverr
 
 router = APIRouter(prefix="/api/config", tags=["config"], dependencies=[Depends(require_user)])
 
@@ -31,6 +32,10 @@ class TestConnectionRequest(BaseModel):
     provider: str
     api_key: str | None = None
     token: str | None = None
+
+
+class TestFlareSolverrRequest(BaseModel):
+    url: str
 
 
 def _item(key: str, entry: Any, store: Any) -> ConfigItem:
@@ -77,6 +82,13 @@ def export_config() -> dict[str, Any]:
 @router.post("/import")
 def import_config(values: dict[str, Any], user: dict = Depends(require_user)) -> dict[str, int]:
     return {"imported": get_config_store().import_config(values, operator=user["username"])}
+
+
+@router.post("/test-flaresolverr")
+def test_flaresolverr(payload: TestFlareSolverrRequest) -> dict[str, Any]:
+    """探测填写的 FlareSolverr 地址是否可用；仅提示，不写库、不拦截保存。"""
+    ok, detail = probe_flaresolverr(payload.url, timeout=8)
+    return {"ok": ok, "detail": detail}
 
 
 @router.post("/test-connection")

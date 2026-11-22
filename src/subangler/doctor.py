@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .config import get_config_store
+from .config import get_config_store, normalize_flaresolverr_url
 
 OK = "ok"
 WARN = "warn"
@@ -130,6 +130,68 @@ def check_media_paths(report: DoctorReport) -> None:
         report.checks.append(CheckResult("media_paths", OK, f"{len(paths)} 个路径可读写"))
 
 
+def probe_flaresolverr(url: str | None, timeout: float = 8.0) -> tuple[bool, str]:
+    """探测给定 FlareSolverr 地址是否可用，返回 (是否可用, 说明)。不写库、不改配置。
+
+    供设置页「检测」按钮与 doctor 自检共用同一套判定逻辑。
+    """
+    import httpx
+
+    base = normalize_flaresolverr_url(url)
+    if not base:
+        return False, "地址为空"
+    try:
+        resp = httpx.get(f"{base}/", timeout=timeout)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"连接失败: {exc}"
+    if resp.status_code != 200:
+        return False, f"HTTP {resp.status_code}"
+    try:
+        body = resp.json()
+    except ValueError:
+        body = {}
+    msg = str(body.get("msg", "")) if isinstance(body, dict) else ""
+    version = str(body.get("version", "")) if isinstance(body, dict) else ""
+    if "flaresolverr" in msg.lower() or version:
+        return True, f"可用 {base}" + (f" v{version}" if version else "")
+    return False, f"响应非 FlareSolverr: {resp.text[:60]}"
+
+
+def check_flaresolverr(report: DoctorReport, probe: bool = True) -> None:
+    """检查 FlareSolverr：探测配置地址上的服务是否可用（替代旧的本机二进制检查）。
+
+    - 未配置：WARN，提示去设置页填写（可选组件，不应判失败）
+    - 已配置且 probe：GET 根路径，校验 msg/version，识别到服务即 OK
+    - 网络失败/非识别响应：FAIL / WARN，给出可操作修复建议
+    """
+    store = get_config_store()
+    try:
+        raw = str(store.get("providers.flaresolverr_url") or "")
+    except Exception:  # noqa: BLE001 - 配置异常不应拖垮自检
+        raw = ""
+    base = normalize_flaresolverr_url(raw)
+    if not base:
+        report.checks.append(
+            CheckResult(
+                "flaresolverr",
+                WARN,
+                "未配置（可选，Zimuku 遇 JS 挑战时才需要）",
+                "设置页 → 字幕源 → FlareSolverr 地址",
+            )
+        )
+        return
+    if not probe:
+        report.checks.append(CheckResult("flaresolverr", OK, f"已配置 {base}（轻量检查跳过探测）"))
+        return
+    ok, detail = probe_flaresolverr(base)
+    if ok:
+        report.checks.append(CheckResult("flaresolverr", OK, detail))
+    elif detail.startswith("连接失败"):
+        report.checks.append(CheckResult("flaresolverr", FAIL, detail, "检查地址/端口/防火墙，或关闭该可选组件"))
+    else:
+        report.checks.append(CheckResult("flaresolverr", WARN, detail, "确认服务已启动、地址指向 FlareSolverr"))
+
+
 def check_providers(report: DoctorReport) -> None:
     import httpx
 
@@ -188,11 +250,13 @@ def run_doctor(probe_providers: bool = True) -> DoctorReport:
     check_python(report)
     check_binary(report, "ffmpeg", "ffmpeg", required=True)
     check_binary(report, "ffprobe", "ffprobe", required=True)
-    check_binary(report, "flaresolverr", "flaresolverr", required=False)
     check_mediainfo_lib(report)
     check_secret_key(report)
     check_db_writable(report)
     check_media_paths(report)
+    # FlareSolverr 从「本机二进制」改为「配置地址上的服务可用性」；
+    # 网络探测跟随 probe_providers 开关，轻量 healthcheck 不做外网请求。
+    check_flaresolverr(report, probe=probe_providers)
     if probe_providers:
         check_providers(report)
     return report

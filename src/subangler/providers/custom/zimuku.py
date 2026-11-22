@@ -16,6 +16,7 @@ from urllib.parse import quote, urljoin
 import httpx
 from bs4 import BeautifulSoup
 
+from ...config import normalize_flaresolverr_url
 from ...core.provider_base import (
     Candidate,
     CaptchaError,
@@ -93,7 +94,7 @@ class ZimukuProvider(ProviderAdapter):
     ):
         self.base_url = base_url.rstrip("/")
         self.cookies = cookies.strip()
-        self.flaresolverr_url = flaresolverr_url.strip().rstrip("/")
+        self.flaresolverr_url = normalize_flaresolverr_url(flaresolverr_url)
         self.quota = quota
         self._client = client or httpx.Client(timeout=timeout, follow_redirects=True)
         self._owns_client = client is None

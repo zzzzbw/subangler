@@ -106,6 +106,19 @@ def _is_sensitive(key: str) -> bool:
     return any(hint in lowered for hint in SENSITIVE_HINT)
 
 
+def normalize_flaresolverr_url(raw: str | None) -> str:
+    """规范化 FlareSolverr 基址：去空白、结尾斜杠，并兼容误填的 /v1 后缀。
+
+    页面填入 ``http://host:8191``、``http://host:8191/``、``http://host:8191/v1``
+    或 ``http://host:8191/v1/`` 都会归一为 ``http://host:8191``，
+    调用方自行拼 ``/v1``，避免 ``/v1/v1`` 或 ``//v1``。
+    """
+    url = (raw or "").strip().rstrip("/")
+    if url.lower().endswith("/v1"):
+        url = url[:-3].rstrip("/")
+    return url
+
+
 # 默认配置注册表：所有页面可配置项都在这里声明
 DEFAULTS: dict[str, ConfigEntry] = {
     "general.languages": ConfigEntry("general.languages", "json", False, ["zh", "en"], "默认下载语言"),

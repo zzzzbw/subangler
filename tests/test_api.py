@@ -24,6 +24,20 @@ def isolated_env(tmp_path, monkeypatch):
     reset_config_store()
 
 
+def test_test_flaresolverr_requires_login(client):
+    assert client.post("/api/config/test-flaresolverr", json={"url": "http://x:8191"}).status_code == 401
+
+
+def test_test_flaresolverr_returns_probe_result(client, monkeypatch):
+    import subangler.api.routes.config as cfg_routes
+
+    monkeypatch.setattr(cfg_routes, "probe_flaresolverr", lambda url, timeout=8: (True, "可用 http://x:8191 v3.5.2"))
+    client.post("/api/auth/login", json={"username": "admin", "password": "test-password-123"})
+    resp = client.post("/api/config/test-flaresolverr", json={"url": "http://x:8191/"})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "detail": "可用 http://x:8191 v3.5.2"}
+
+
 def test_health_is_public(client):
     resp = client.get("/api/health")
     assert resp.status_code == 200
