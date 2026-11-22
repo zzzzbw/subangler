@@ -45,6 +45,48 @@ def test_to_language():
     assert to_language("zho").alpha3 == "zho"
 
 
+def test_scan_library_reports_progress(quota):
+    """scan_library 应对每个视频上报进度（5%→95%），不再全程 0%。"""
+    videos = [make_video(f"/media/show{i}.mkv") for i in range(4)]
+    kernel = MagicMock()
+    kernel.scan.return_value = videos
+    kernel.refine.side_effect = lambda v: v
+    progress_calls: list[tuple[int, str]] = []
+    cfg = OrchestratorConfig()
+    orch = DownloadOrchestrator(cfg, kernel, quota,
+                                on_progress=lambda pct, step: progress_calls.append((pct, step)))
+    result = orch.scan_library("/media")
+
+    assert len(result) == 4
+    assert len(progress_calls) == 4
+    # 进度单调不减，且不超过 95（入库后由上层置 100）
+    pcts = [p for p, _ in progress_calls]
+    assert pcts == sorted(pcts)
+    assert max(pcts) <= 95
+    assert all("解析元数据" in step for _, step in progress_calls)
+    assert kernel.refine.call_count == 4
+
+
+def test_scan_library_logs_each_file(quota):
+    """扫描时每个媒体文件写一条决策日志，供任务详情实时展示。"""
+    videos = [make_video(f"/media/show{i}.mkv") for i in range(3)]
+    kernel = MagicMock()
+    kernel.scan.return_value = videos
+    kernel.refine.side_effect = lambda v: v
+    records = []
+    orch = DownloadOrchestrator(
+        OrchestratorConfig(), kernel, quota, on_decision=records.append, job_id=42,
+    )
+
+    orch.scan_library("/media")
+
+    scan_files = [r for r in records if r["step"] == "scan_file"]
+    assert [r["candidates"]["index"] for r in scan_files] == [1, 2, 3]
+    assert scan_files[-1]["candidates"]["path"] == "/media/show2.mkv"
+    assert all(r["job_id"] == 42 for r in records)
+    assert records[-1]["step"] == "scan"
+
+
 def test_skip_existing_language(quota, tmp_path):
     video = make_video("/media/show.mkv", {"en"})
     kernel = MagicMock()

@@ -5,6 +5,7 @@ import type { Job, Decision } from '../types'
 import { Badge, Card, Empty, ErrorBox, Spinner, humanizeReason, stateTone, timeAgo, useToasts } from '../components/ui'
 
 type ToastPush = ReturnType<typeof useToasts>['push']
+const MAX_DECISIONS = 200
 
 export default function Jobs({ push }: { push: ToastPush }) {
   const [params] = useSearchParams()
@@ -35,13 +36,35 @@ export default function Jobs({ push }: { push: ToastPush }) {
   }, [])
   useEffect(() => { load() }, [load])
 
+  const loadDecisions = useCallback(async (id: number) => {
+    try {
+      const r = await api.get<{ items: Decision[] }>(`/api/jobs/${id}/decisions`)
+      setDecisions(r.items.slice(-MAX_DECISIONS))
+    } catch { /* 日志加载失败不影响进度展示 */ }
+  }, [])
+
   function selectJob(id: number) {
     setActiveId(id); setDecisions([]); setLive(null)
     if (closeStream.current) closeStream.current()
-    api.get<{ items: Decision[] }>(`/api/jobs/${id}/decisions`).then((r) => setDecisions(r.items)).catch(() => {})
+    loadDecisions(id)
     closeStream.current = api.streamJob(id, (payload, type) => {
-      setLive(payload)
-      if (type === 'job.done') { load(); push(`任务 #${id} 已结束：${payload.state}`, payload.state === 'FAILED' ? 'error' : 'ok') }
+      if (type === 'job.decisions' && payload.items) {
+        const incoming = payload.items
+        setDecisions((prev) => {
+          const seen = new Set(prev.map((d) => d.id))
+          return [...prev, ...incoming.filter((d) => !seen.has(d.id))].slice(-MAX_DECISIONS)
+        })
+        return
+      }
+      setLive((prev) => ({
+        state: payload.state ?? prev?.state ?? '',
+        progress: payload.progress ?? prev?.progress ?? 0,
+        error_message: payload.error_message ?? prev?.error_message ?? null,
+      }))
+      if (type === 'job.done') {
+        load(); loadDecisions(id)
+        push(`任务 #${id} 已结束：${payload.state}`, payload.state === 'FAILED' ? 'error' : 'ok')
+      }
     }, () => { /* 流结束 */ })
   }
 
@@ -56,6 +79,10 @@ export default function Jobs({ push }: { push: ToastPush }) {
   const active = jobs.find((j) => j.id === activeId) || null
   const shownState = live?.state || active?.state
   const shownProgress = live?.progress ?? active?.progress ?? 0
+  const scanFiles = decisions.filter((d) => d.step === 'scan_file')
+  const otherDecisions = decisions.filter((d) => d.step !== 'scan_file')
+  const lastScanMeta = scanFiles.length ? scanMeta(scanFiles[scanFiles.length - 1]) : {}
+  const scanTotal = lastScanMeta.total || decisions.find((d) => d.step === 'scan' && d.reason?.includes('共发现'))?.reason?.match(/\d+/)?.[0] || '?'
 
   return (
     <div className="page">
@@ -98,18 +125,43 @@ export default function Jobs({ push }: { push: ToastPush }) {
                 <div className="error-box"><span>{humanizeReason(live?.error_message || active.error_message)}</span></div>
               )}
               <h3 className="subhead">决策日志</h3>
-              {decisions.length === 0 ? <Empty text="暂无决策记录" /> : (
-                <div className="decision-list">
-                  {decisions.map((d, idx) => (
-                    <div key={idx} className="decision-row">
-                      <span className={`decision-step step-${d.step}`}>{stepLabel(d.step)}</span>
-                      <span className="decision-provider">{d.provider || '—'}</span>
-                      {d.score != null && <Badge tone={d.score >= 60 ? 'ok' : 'warn'}>{d.score}分</Badge>}
-                      <span className="decision-reason">{humanizeReason(d.reason)}</span>
-                      {d.latency_ms != null && <span className="decision-latency">{d.latency_ms}ms</span>}
+              {decisions.length === 0 ? <Empty text="暂无决策记录" hint="扫描时这里会实时列出正在解析的媒体文件" /> : (
+                <>
+                  {scanFiles.length > 0 && (
+                    <div className="scan-file-block">
+                      <p className="scan-file-head">扫描文件 · {scanFiles.length}/{scanTotal}</p>
+                      <div className="scan-file-list">
+                        {scanFiles.map((d, idx) => {
+                          const meta = scanMeta(d)
+                          const path = meta.path || d.reason || ''
+                          const { name, dir } = splitPath(path)
+                          const isCurrent = shownState === 'RUNNING' && idx === scanFiles.length - 1
+                          return (
+                            <div key={d.id} className={`scan-file-row ${isCurrent ? 'current' : ''}`}>
+                              <span className="scan-index">{meta.index ?? idx + 1}/{meta.total ?? scanTotal}</span>
+                              <span className="scan-file-name" title={path}>{name || path}</span>
+                              <span className="scan-file-dir" title={dir}>{dir || '—'}</span>
+                              {isCurrent && <Badge tone="warn">解析中</Badge>}
+                            </div>
+                          )
+                        })}
+                      </div>
                     </div>
-                  ))}
-                </div>
+                  )}
+                  {otherDecisions.length > 0 && (
+                    <div className="decision-list">
+                      {otherDecisions.map((d) => (
+                        <div key={d.id} className="decision-row">
+                          <span className={`decision-step step-${d.step}`}>{stepLabel(d.step)}</span>
+                          <span className="decision-provider">{d.provider || '—'}</span>
+                          {d.score != null && <Badge tone={d.score >= 60 ? 'ok' : 'warn'}>{d.score}分</Badge>}
+                          <span className="decision-reason">{humanizeReason(d.reason)}</span>
+                          {d.latency_ms != null && <span className="decision-latency">{d.latency_ms}ms</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </>
           )}
@@ -119,9 +171,20 @@ export default function Jobs({ push }: { push: ToastPush }) {
   )
 }
 
+function scanMeta(d: Decision | undefined): { index?: number; total?: number; path?: string } {
+  if (!d || !d.candidates || typeof d.candidates !== 'object' || Array.isArray(d.candidates)) return {}
+  return d.candidates as { index?: number; total?: number; path?: string }
+}
+
+// 兼容 Windows 反斜杠与 POSIX 斜杠路径。
+function splitPath(path: string): { name: string; dir: string } {
+  const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return i >= 0 ? { name: path.slice(i + 1), dir: path.slice(0, i) } : { name: path, dir: '' }
+}
+
 function stepLabel(step: string): string {
   const map: Record<string, string> = {
-    scan: '扫描', refine: '元数据', search: '搜索', searched: '搜索完成', scored: '评分',
+    scan: '扫描完成', scan_file: '扫描文件', refine: '元数据', search: '搜索', searched: '搜索完成', scored: '评分',
     downloaded: '已下载', below_threshold: '评分不足', no_candidate: '无候选',
     save_failed: '落盘失败', provider_throttled: '源熔断', skip_existing: '跳过已有',
   }

@@ -1,5 +1,14 @@
 // 统一 API 客户端：处理 401 跳转、错误提取、SSE 订阅。
 
+import type { Decision } from './types'
+
+export interface JobStreamPayload {
+  state?: string
+  progress?: number
+  error_message?: string | null
+  items?: Decision[]
+}
+
 export class ApiError extends Error {
   constructor(message: string, public status: number) {
     super(message)
@@ -85,7 +94,7 @@ export const api = {
   // SSE：cookie 自动随同源请求发送，订阅任务进度。
   streamJob(
     jobId: number,
-    onEvent: (payload: { state: string; progress: number; error_message: string | null }, type: string) => void,
+    onEvent: (payload: JobStreamPayload, type: string) => void,
     onError?: (e: Event) => void,
   ): () => void {
     const source = new EventSource(`/api/jobs/${jobId}/events`)
@@ -93,6 +102,7 @@ export const api = {
       try { onEvent(JSON.parse(e.data), type) } catch { /* 忽略坏帧 */ }
     }
     source.addEventListener('job.progress', forward('job.progress') as EventListener)
+    source.addEventListener('job.decisions', forward('job.decisions') as EventListener)
     source.addEventListener('job.done', forward('job.done') as EventListener)
     source.addEventListener('error', (e) => {
       if (e instanceof MessageEvent) {

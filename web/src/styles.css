@@ -271,6 +271,15 @@ textarea.config-input { font-family: ui-monospace, "SF Mono", Menlo, Consolas, m
 .decision-provider { min-width: 90px; color: var(--muted); }
 .decision-reason { flex: 1; color: var(--text-2); }
 .decision-latency { color: var(--muted); font-size: 11px; }
+.scan-file-block { margin-bottom: 14px; }
+.scan-file-head { font-size: 11px; color: var(--muted); margin: 4px 0 6px; }
+.scan-file-list { max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.scan-file-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; border-bottom: 1px solid var(--surface-2); }
+.scan-file-row:last-child { border-bottom: 0; }
+.scan-file-row.current { background: var(--warn-soft); }
+.scan-index { flex: 0 0 52px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.scan-file-name { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
+.scan-file-dir { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- Candidates ---------- */
 .candidate-groups { display: flex; flex-direction: column; gap: 18px; }

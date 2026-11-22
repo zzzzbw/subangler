@@ -9,7 +9,7 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 
 from ...auth import require_user
 from ...config import get_config_store
@@ -77,22 +77,26 @@ def get_job(job_id: int) -> dict:
         }
 
 
+def _decision_dict(r: DecisionLog) -> dict:
+    return {
+        "id": r.id,
+        "step": r.step, "provider": r.provider, "score": r.score, "reason": r.reason,
+        "candidates": json.loads(r.candidate_json) if r.candidate_json else None,
+        "latency_ms": r.latency_ms,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    }
+
+
 @router.get("/{job_id}/decisions")
 def job_decisions(job_id: int, limit: int = 200) -> dict:
     ctx = _ctx()
     with ctx.SessionLocal() as session:
+        # 取最近 limit 条，再按时间正序返回：大库扫描时也能看到最新的文件列表。
         rows = session.execute(
-            select(DecisionLog).where(DecisionLog.job_id == job_id).order_by(DecisionLog.id).limit(limit)
+            select(DecisionLog).where(DecisionLog.job_id == job_id)
+            .order_by(desc(DecisionLog.id)).limit(limit)
         ).scalars().all()
-    return {"items": [
-        {
-            "step": r.step, "provider": r.provider, "score": r.score, "reason": r.reason,
-            "candidates": json.loads(r.candidate_json) if r.candidate_json else None,
-            "latency_ms": r.latency_ms,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-        }
-        for r in rows
-    ]}
+    return {"items": [_decision_dict(r) for r in reversed(rows)]}
 
 
 @router.get("/{job_id}/events")
@@ -102,8 +106,23 @@ async def job_events(job_id: int) -> StreamingResponse:
 
     async def gen() -> AsyncGenerator[str, None]:
         last_state = None
+        # 订阅时刻之后新增的决策日志才推送，避免重放历史（首屏由 HTTP 接口加载）。
+        with ctx.SessionLocal() as session:
+            last_decision_id = session.execute(
+                select(func.coalesce(func.max(DecisionLog.id), 0))
+                .where(DecisionLog.job_id == job_id)
+            ).scalar_one()
         for _ in range(600):  # 最多 10 分钟
             with ctx.SessionLocal() as session:
+                new_rows = session.execute(
+                    select(DecisionLog).where(
+                        DecisionLog.job_id == job_id, DecisionLog.id > last_decision_id
+                    ).order_by(DecisionLog.id).limit(200)
+                ).scalars().all()
+                if new_rows:
+                    last_decision_id = new_rows[-1].id
+                    payload = {"items": [_decision_dict(r) for r in new_rows]}
+                    yield f"event: job.decisions\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 job = session.get(Job, job_id)
                 if not job:
                     yield 'event: error\ndata: {"detail":"任务不存在"}\n\n'

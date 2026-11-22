@@ -86,11 +86,15 @@ class DownloadOrchestrator:
         cache_path: str | None = None,
         on_decision: Callable[[dict[str, Any]], None] | None = None,
         custom_providers: dict[str, ProviderAdapter] | None = None,
+        on_progress: Callable[[int, str], None] | None = None,
+        job_id: int | None = None,
     ):
         self.config = config
         self.kernel = kernel
         self.quota = quota
         self.on_decision = on_decision
+        self.on_progress = on_progress
+        self.job_id = job_id
         self.custom_providers: dict[str, ProviderAdapter] = custom_providers or {}
         if cache_path:
             from .subliminal_adapter import configure_cache
@@ -98,23 +102,40 @@ class DownloadOrchestrator:
             configure_cache(cache_path)
 
     def _log(self, step: str, **kwargs: Any) -> None:
-        record = {"step": step, **kwargs}
+        record: dict[str, Any] = {"step": step, **kwargs}
+        if self.job_id is not None:
+            record.setdefault("job_id", self.job_id)
         logger.debug("decision: %s", record)
         if self.on_decision:
             self.on_decision(record)
 
     def scan_library(self, root: str | Path) -> list[dict[str, Any]]:
-        """扫描目录，返回视频信息字典（尚未入库）。"""
+        """扫描目录，返回视频信息字典（尚未入库）。
+
+        refine 阶段（MediaInfo 解析 + 哈希）对每个视频都较耗时，大库可能持续
+        数十分钟。这里按视频粒度上报进度（5%→95%，入库后由上层置 100%），
+        让任务详情能实时显示进展，而不是全程 0% 看似卡死。
+        """
         videos = self.kernel.scan(root)
+        total = len(videos)
         result = []
-        for video in videos:
+        for index, video in enumerate(videos, start=1):
+            # 在 refine（MediaInfo 解析 + 哈希，最耗时）之前落一条日志，
+            # 任务详情的“决策日志”即可实时列出当前正在解析的媒体文件。
+            path = video_path(video)
+            self._log("scan_file", video=path, reason=path,
+                      candidates={"path": path, "index": index, "total": total})
             self.kernel.refine(video)
             info = video_to_dict(video)
             # 忽略 und（undefined）轨：很多文件有未标语言的内嵌轨，不代表"已有中/英字幕"
             langs = [str(l) for l in (video.subtitle_languages or set()) if str(l) != "und"]
             info["subtitle_languages"] = langs
             result.append(info)
-        self._log("scan", root=str(root), found=len(result))
+            if self.on_progress:
+                pct = 5 + int(index * 90 / total) if total else 95
+                self.on_progress(min(pct, 95), f"解析元数据 {index}/{total}")
+        self._log("scan", root=str(root), found=len(result),
+                  reason=f"扫描完成，共发现 {len(result)} 个视频")
         return result
 
     def download_video(self, path: str) -> list[DownloadOutcome]:

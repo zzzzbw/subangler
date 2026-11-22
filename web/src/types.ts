@@ -71,6 +71,7 @@ export interface Job {
 }
 
 export interface Decision {
+  id: number
   step: string
   provider: string | null
   score: number | null

@@ -28,10 +28,46 @@ class WorkerRunner:
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
+        self.recover_orphan_jobs()
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="subangler-worker")
         self._thread.start()
         logger.info("worker started")
+
+    def recover_orphan_jobs(self) -> int:
+        """把上次进程残留的 RUNNING 任务重置为 PENDING。
+
+        本项目的 worker 是进程内后台线程：start() 时数据库里任何 RUNNING 任务都
+        来自上一次进程，旧进程已退出，它们不可能再被继续执行。若不回收，这类
+        "孤儿任务"会永远卡在 RUNNING（worker 只查 PENDING）。
+
+        返回被回收的任务数。回收失败只记日志、不阻断 worker 启动，避免数据库
+        异常连带导致整个服务起不来。
+        """
+        from ..core.models import Job
+
+        try:
+            with self.ctx.SessionLocal() as session:
+                orphans = session.execute(
+                    select(Job).where(Job.state == "RUNNING")
+                ).scalars().all()
+                if not orphans:
+                    return 0
+                for job in orphans:
+                    logger.warning(
+                        "recovering orphan job %s (type=%s, created_at=%s)",
+                        job.id, job.type, job.created_at,
+                    )
+                    job.state = "PENDING"
+                    job.progress = 0
+                    job.error_code = None
+                    job.error_message = None
+                    job.finished_at = None
+                session.commit()
+                return len(orphans)
+        except Exception as exc:  # noqa: BLE001 - 回收失败不应阻断 worker 启动
+            logger.exception("failed to recover orphan jobs: %s", exc)
+            return 0
 
     def stop(self) -> None:
         self._stop.set()

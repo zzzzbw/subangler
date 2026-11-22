@@ -52,7 +52,7 @@ class TaskContext:
         self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
         self.quota = QuotaManager(self.db_path)
 
-    def orchestrator(self, progress: ProgressCB | None = None) -> DownloadOrchestrator:
+    def orchestrator(self, progress: ProgressCB | None = None, job_id: int | None = None) -> DownloadOrchestrator:
         store = self.config_store
         enabled = list(store.get("providers.enabled") or [])
         cfg = OrchestratorConfig(
@@ -89,8 +89,6 @@ class TaskContext:
                     latency_ms=record.get("latency_ms"),
                 ))
                 session.commit()
-            if progress:
-                progress(0, str(record.get("step", "")))
 
         return DownloadOrchestrator(
             config=cfg,
@@ -99,6 +97,8 @@ class TaskContext:
             cache_path=str(Path(self.db_path).parent / "search_cache.dbm"),
             on_decision=on_decision,
             custom_providers=custom,
+            on_progress=progress,
+            job_id=job_id,
         )
 
 
@@ -125,7 +125,7 @@ def run_scan_library(ctx: TaskContext, library_id: int, job_id: int | None = Non
         if not lib:
             raise ValueError(f"媒体库不存在: {library_id}")
         root = lib.root_path
-    orch = ctx.orchestrator(progress)
+    orch = ctx.orchestrator(progress, job_id=job_id)
     videos = orch.scan_library(root)
 
     added = 0
@@ -160,7 +160,7 @@ def run_scan_library(ctx: TaskContext, library_id: int, job_id: int | None = Non
 
 def run_download_batch(ctx: TaskContext, video_ids: list[int], languages: list[str] | None = None,
                        job_id: int | None = None, progress: ProgressCB | None = None) -> dict[str, Any]:
-    orch = ctx.orchestrator(progress)
+    orch = ctx.orchestrator(progress, job_id=job_id)
     if languages:
         orch.config.languages = languages
 

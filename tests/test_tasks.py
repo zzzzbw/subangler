@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from subangler.auth import AuthManager, init_auth_from_config, set_auth_manager
 from subangler.config import ConfigStore, reset_config_store
-from subangler.core.models import Job, MediaLibrary, Subtitle, Video
+from subangler.core.models import DecisionLog, Job, MediaLibrary, Subtitle, Video
 from subangler.main import app
 from subangler.worker.tasks import TaskContext, run_download_batch, run_scan_library
 
@@ -58,6 +58,22 @@ def test_scan_library_persists_videos(ctx):
         rows = session.execute(select(Video)).scalars().all()
         assert len(rows) == 1
         assert rows[0].season == 1 and rows[0].episode == 1
+
+
+def test_scan_library_passes_job_id_to_orchestrator(ctx):
+    with ctx.SessionLocal() as session:
+        lib = MediaLibrary(root_path="/media", name="TV")
+        session.add(lib)
+        session.commit()
+        lib_id = lib.id
+
+    with patch.object(ctx, "orchestrator") as mock_orch_factory:
+        orch = MagicMock()
+        orch.scan_library.return_value = []
+        mock_orch_factory.return_value = orch
+        run_scan_library(ctx, lib_id, job_id=77)
+
+    assert mock_orch_factory.call_args.kwargs["job_id"] == 77
 
 
 def test_download_batch_updates_video_status(ctx):
@@ -128,5 +144,17 @@ def test_api_libraries_and_videos(ctx, tmp_path, monkeypatch):
         r = client.get(f"/api/jobs/{job_id}/decisions")
         assert r.status_code == 200
         assert "items" in r.json()
+
+        # 决策日志返回最近记录（含 id），大库扫描时最新的文件列表不会被截断。
+        with ctx.SessionLocal() as session:
+            for i in range(3):
+                session.add(DecisionLog(
+                    job_id=job_id, step="scan_file", reason=f"/media/{i}.mkv",
+                    candidate_json=json.dumps({"index": i + 1, "total": 3, "path": f"/media/{i}.mkv"}),
+                ))
+            session.commit()
+        items = client.get(f"/api/jobs/{job_id}/decisions").json()["items"]
+        assert [item["reason"] for item in items] == ["/media/0.mkv", "/media/1.mkv", "/media/2.mkv"]
+        assert all(isinstance(item["id"], int) for item in items)
 
     reset_config_store()
