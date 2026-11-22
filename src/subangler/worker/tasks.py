@@ -118,6 +118,42 @@ def set_job_state(ctx: TaskContext, job_id: int, state: str, progress: int | Non
         session.commit()
 
 
+def _job_log(ctx: TaskContext, job_id: int | None, step: str, reason: str,
+             candidates: dict[str, Any] | None = None) -> None:
+    """写一条任务级决策日志，供任务详情展示。"""
+    if job_id is None:
+        return
+    with ctx.SessionLocal() as session:
+        session.add(DecisionLog(
+            job_id=job_id, step=step, reason=reason,
+            candidate_json=json.dumps(candidates, ensure_ascii=False) if candidates is not None else None,
+        ))
+        session.commit()
+
+
+def _outcome_reason(outcome: DownloadOutcome) -> str:
+    """把下载结果转成人类可读文案，避免把统计值塞进错误提示。"""
+    if outcome.status == "downloaded":
+        text = f"已保存字幕：{outcome.subtitle_path or '—'}"
+        extras = []
+        if outcome.provider:
+            extras.append(outcome.provider)
+        if outcome.score is not None:
+            extras.append(f"{outcome.score} 分")
+        return f"{text}（{'，'.join(extras)}）" if extras else text
+    if outcome.status == "skipped_existing":
+        return "已有对应语言字幕，按设置跳过"
+    if outcome.status == "no_candidate":
+        return "所有字幕源均未找到候选"
+    if outcome.status == "below_threshold":
+        return f"最高分 {outcome.score or 0} 低于阈值，未自动采用"
+    if outcome.status == "throttled":
+        return f"字幕源限流或熔断，已跳过：{outcome.reason}" if outcome.reason else "字幕源限流或熔断，已跳过"
+    if outcome.status == "failed":
+        return f"下载失败：{outcome.reason}" if outcome.reason else "下载失败"
+    return outcome.reason or outcome.status
+
+
 def run_scan_library(ctx: TaskContext, library_id: int, job_id: int | None = None,
                      progress: ProgressCB | None = None) -> dict[str, Any]:
     with ctx.SessionLocal() as session:
@@ -176,6 +212,15 @@ def run_download_batch(ctx: TaskContext, video_ids: list[int], languages: list[s
         batch = orch.download_video(video.path)
         for outcome in batch:
             outcomes.append(outcome)
+            _job_log(ctx, job_id, "download_result", _outcome_reason(outcome), {
+                "video_path": outcome.video_path,
+                "language": outcome.language,
+                "status": outcome.status,
+                "provider": outcome.provider,
+                "score": outcome.score,
+                "subtitle_path": outcome.subtitle_path,
+                "detail": outcome.reason,
+            })
             # M2: 候选入库（人工挑选）。先查该视频对应的 DB id。
             with ctx.SessionLocal() as session:
                 video_row = session.get(Video, video.id)
@@ -236,6 +281,11 @@ def run_download_batch(ctx: TaskContext, video_ids: list[int], languages: list[s
     }
     if job_id:
         state = "SUCCESS" if failed == 0 else ("PARTIAL" if downloaded > 0 else "FAILED")
-        set_job_state(ctx, job_id, state, 100, error_code=None if failed == 0 else "PARTIAL_FAILURE",
-                      error_message=f"downloaded={downloaded}, failed={failed}")
+        summary_text = f"下载完成：成功 {downloaded} 个，失败 {failed} 个"
+        _job_log(ctx, job_id, "download_summary", summary_text,
+                 {"total": total, "downloaded": downloaded, "failed": failed})
+        # error_message 只承载真正的异常信息；成功任务的统计值走决策日志，不显示成红色报错。
+        set_job_state(ctx, job_id, state, 100,
+                      error_code=None if failed == 0 else "PARTIAL_FAILURE",
+                      error_message=None if state == "SUCCESS" else summary_text)
     return summary

@@ -280,6 +280,16 @@ textarea.config-input { font-family: ui-monospace, "SF Mono", Menlo, Consolas, m
 .scan-index { flex: 0 0 52px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .scan-file-name { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
 .scan-file-dir { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.download-legacy { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; margin-bottom: 12px; background: var(--surface-2); border-radius: var(--radius-sm); font-size: 12px; }
+.download-legacy small { color: var(--muted); }
+.download-result-block { margin-bottom: 14px; }
+.download-result-head { font-size: 11px; color: var(--muted); margin: 4px 0 6px; }
+.download-result-list { max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.download-result-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: 12px; border-bottom: 1px solid var(--surface-2); }
+.download-result-row:last-child { border-bottom: 0; }
+.download-video { flex: 0 1 32%; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.download-detail { flex: 1; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.download-provider { color: var(--muted); }
 
 /* ---------- Candidates ---------- */
 .candidate-groups { display: flex; flex-direction: column; gap: 18px; }

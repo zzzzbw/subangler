@@ -83,8 +83,11 @@ def test_download_batch_updates_video_status(ctx):
         session.flush()
         video = Video(library_id=lib.id, path="/media/Show.S01E01.mkv", status="scanned")
         session.add(video)
+        session.flush()
+        job = Job(type="download_batch", payload_json="{}", state="RUNNING")
+        session.add(job)
         session.commit()
-        vid = video.id
+        vid, job_id = video.id, job.id
 
     with patch.object(ctx, "orchestrator") as mock_orch_factory:
         orch = MagicMock()
@@ -95,7 +98,7 @@ def test_download_batch_updates_video_status(ctx):
             provider="fake", score=90, subtitle_path="/media/Show.S01E01.en.srt",
         )]
         mock_orch_factory.return_value = orch
-        result = run_download_batch(ctx, [vid], languages=["en"])
+        result = run_download_batch(ctx, [vid], languages=["en"], job_id=job_id)
 
     assert result["downloaded"] == 1
     with ctx.SessionLocal() as session:
@@ -104,6 +107,14 @@ def test_download_batch_updates_video_status(ctx):
         subs = session.execute(select(Subtitle)).scalars().all()
         assert len(subs) == 1
         assert subs[0].language == "en"
+        logs = session.execute(
+            select(DecisionLog).where(DecisionLog.job_id == job_id).order_by(DecisionLog.id)
+        ).scalars().all()
+        steps = [log.step for log in logs]
+        assert steps[-2:] == ["download_result", "download_summary"]
+        assert "/media/Show.S01E01.en.srt" in (logs[-2].reason or "")
+        assert "成功 1 个，失败 0 个" in (logs[-1].reason or "")
+        assert session.get(Job, job_id).error_message is None
 
 
 def test_api_libraries_and_videos(ctx, tmp_path, monkeypatch):
