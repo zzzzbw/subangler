@@ -221,7 +221,7 @@ function ConfigField({ item, value, revealed, onReveal, onChange, testProvider, 
   } else if (item.value_type === 'int') {
     control = <input className="config-input" type="number" value={Number(value ?? 0)} onChange={(e) => onChange(Number(e.target.value))} />
   } else if (item.value_type === 'json') {
-    control = <JsonConfigField itemKey={item.key} value={value} onChange={onChange} />
+    control = <JsonConfigField value={value} onChange={onChange} />
   } else if (item.sensitive) {
     control = (
       <div className="row-gap">
@@ -260,7 +260,6 @@ function ConfigField({ item, value, revealed, onReveal, onChange, testProvider, 
 
 // 审计展示：配置 key 翻译成中文名，值做截断，避免整条数组刷屏。
 const AUDIT_KEY_LABELS: Record<string, string> = {
-  'library.root_paths': '媒体库根目录',
   'library.scan_cron': '默认扫描周期',
   'providers.enabled': '启用的字幕源',
   'providers.priority': '字幕源优先级',
@@ -288,8 +287,8 @@ function formatAuditValue(v: unknown): string {
 }
 
 // JSON 配置字段：解析失败给出明确提示；对 Windows 路径反斜杠做容错。
-function JsonConfigField({ itemKey, value, onChange }: {
-  itemKey: string; value: unknown; onChange: (v: unknown) => void
+function JsonConfigField({ value, onChange }: {
+  value: unknown; onChange: (v: unknown) => void
 }) {
   const serialized = useMemo(() => JSON.stringify(value ?? [], null, 2), [value])
   const [text, setText] = useState(serialized)
@@ -321,9 +320,6 @@ function JsonConfigField({ itemKey, value, onChange }: {
         onChange={(e) => commit(e.target.value, false)}
         onBlur={(e) => commit(e.target.value, true)} />
       {error && <div className="field-error">{error}</div>}
-      {itemKey === 'library.root_paths' && !error && (
-        <div className="field-hint">提示：Windows 路径可写 "Y:/tv" 或 "Y:\\tv"，保存时自动规范化。</div>
-      )}
     </div>
   )
 }

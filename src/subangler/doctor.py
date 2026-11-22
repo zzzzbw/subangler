@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import create_engine, text
+
 from .config import get_config_store, normalize_flaresolverr_url
 
 OK = "ok"
@@ -112,14 +114,35 @@ def check_db_writable(report: DoctorReport) -> None:
 
 
 def check_media_paths(report: DoctorReport) -> None:
+    """检查媒体库根目录（单一数据源：媒体库页面的 media_library 表）。
+
+    不再读 library.root_paths 配置项——扫描实际用的是媒体库记录，
+    自检必须与扫描路径一致，避免两处脱节造成误报。
+    """
     store = get_config_store()
-    paths = store.get("library.root_paths") or []
+    engine = create_engine(f"sqlite:///{store.db_path}", connect_args={"check_same_thread": False, "timeout": 30})
+    try:
+        with engine.connect() as conn:
+            # 表可能尚未创建（首次启动/纯配置库），此时视为无媒体库。
+            exists = conn.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='media_library'")
+            ).scalar_one_or_none()
+            if not exists:
+                report.checks.append(CheckResult("media_paths", WARN, "尚未添加媒体库", "到「媒体库」页面添加目录"))
+                return
+            rows = conn.execute(text("SELECT root_path FROM media_library WHERE enabled = 1")).scalars().all()
+        paths = [str(r) for r in rows if r]
+    except Exception as exc:  # noqa: BLE001 - 自检不应因查询异常整体崩溃
+        report.checks.append(CheckResult("media_paths", WARN, f"读取媒体库失败: {exc}", "检查数据库文件与权限"))
+        return
+    finally:
+        engine.dispose()
     if not paths:
-        report.checks.append(CheckResult("media_paths", WARN, "尚未配置媒体库根目录", "到设置页添加路径"))
+        report.checks.append(CheckResult("media_paths", WARN, "尚未添加媒体库", "到「媒体库」页面添加目录"))
         return
     problems: list[str] = []
     for raw in paths:
-        p = Path(str(raw))
+        p = Path(raw)
         if not p.exists():
             problems.append(f"{p} 不存在")
         elif not os.access(p, os.W_OK):
@@ -127,7 +150,7 @@ def check_media_paths(report: DoctorReport) -> None:
     if problems:
         report.checks.append(CheckResult("media_paths", FAIL, "; ".join(problems), "检查路径映射与权限"))
     else:
-        report.checks.append(CheckResult("media_paths", OK, f"{len(paths)} 个路径可读写"))
+        report.checks.append(CheckResult("media_paths", OK, f"{len(paths)} 个媒体库路径可读写"))
 
 
 def probe_flaresolverr(url: str | None, timeout: float = 8.0) -> tuple[bool, str]:

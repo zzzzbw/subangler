@@ -5,8 +5,17 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from sqlalchemy import create_engine, text
+
 from subangler.config import normalize_flaresolverr_url
-from subangler.doctor import FAIL, OK, WARN, DoctorReport, check_flaresolverr, probe_flaresolverr
+from subangler.core.models import Base, MediaLibrary
+from subangler.doctor import (
+    FAIL, OK, WARN,
+    DoctorReport,
+    check_flaresolverr,
+    check_media_paths,
+    probe_flaresolverr,
+)
 
 
 # ---------------- URL 规范化 ----------------
@@ -128,3 +137,163 @@ def test_probe_flaresolverr_non_flaresolverr_response(monkeypatch):
     ok, detail = probe_flaresolverr("http://other.local")
     assert ok is False
     assert "非 FlareSolverr" in detail
+
+
+# ---------------- 媒体库路径自检（读 media_library 表） ----------------
+
+def _patch_store_db(monkeypatch, db_path):
+    class FakeStore:
+        def __init__(self):
+            self.db_path = db_path
+
+    import subangler.doctor as doctor
+
+    monkeypatch.setattr(doctor, "get_config_store", lambda: FakeStore())
+
+
+def test_media_paths_no_library_table_is_warn(tmp_path, monkeypatch):
+    _patch_store_db(monkeypatch, tmp_path / "empty.db")
+    report = DoctorReport()
+    check_media_paths(report)
+    check = report.checks[0]
+    assert check.status == WARN
+    assert "尚未添加媒体库" in check.detail
+
+
+def test_media_paths_empty_table_is_warn(tmp_path, monkeypatch):
+    db = tmp_path / "app.db"
+    engine = create_engine(f"sqlite:///{db}")
+    Base.metadata.create_all(engine)  # 建表但无记录
+    engine.dispose()
+    _patch_store_db(monkeypatch, db)
+    report = DoctorReport()
+    check_media_paths(report)
+    assert report.checks[0].status == WARN
+    assert "媒体库" in report.checks[0].fix
+
+
+def test_media_paths_reads_library_table(tmp_path, monkeypatch):
+    db = tmp_path / "app.db"
+    engine = create_engine(f"sqlite:///{db}")
+    Base.metadata.create_all(engine)
+    good = tmp_path / "media"
+    good.mkdir()
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO media_library (root_path, name, scan_cron, scan_depth, enabled) "
+                 "VALUES (:p, '测试库', '0 3 * * *', 3, 1)"),
+            {"p": str(good)},
+        )
+        conn.execute(
+            text("INSERT INTO media_library (root_path, name, scan_cron, scan_depth, enabled) "
+                 "VALUES (:p, '禁用库', '0 3 * * *', 3, 0)"),
+            {"p": str(tmp_path / "disabled-nonexistent")},
+        )
+    engine.dispose()
+    _patch_store_db(monkeypatch, db)
+    report = DoctorReport()
+    check_media_paths(report)
+    check = report.checks[0]
+    assert check.status == OK, check.detail
+    # 禁用的库不应被检查（否则会因路径不存在而 FAIL）
+    assert "1 个媒体库路径可读写" in check.detail
+
+
+def test_media_paths_nonexistent_library_path_is_fail(tmp_path, monkeypatch):
+    db = tmp_path / "app.db"
+    engine = create_engine(f"sqlite:///{db}")
+    Base.metadata.create_all(engine)
+    missing = tmp_path / "not-exists"
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO media_library (root_path, name, scan_cron, scan_depth, enabled) "
+                 "VALUES (:p, '缺失路径库', '0 3 * * *', 3, 1)"),
+            {"p": str(missing)},
+        )
+    engine.dispose()
+    _patch_store_db(monkeypatch, db)
+    report = DoctorReport()
+    check_media_paths(report)
+    check = report.checks[0]
+    assert check.status == FAIL
+    assert "不存在" in check.detail
+
+
+# ---------------- 媒体库路径自检（读 media_library 表） ----------------
+
+def _patch_store_db(monkeypatch, db_path):
+    class FakeStore:
+        def __init__(self):
+            self.db_path = db_path
+
+    import subangler.doctor as doctor
+
+    monkeypatch.setattr(doctor, "get_config_store", lambda: FakeStore())
+
+
+def test_media_paths_no_library_table_is_warn(tmp_path, monkeypatch):
+    _patch_store_db(monkeypatch, tmp_path / "empty.db")
+    report = DoctorReport()
+    check_media_paths(report)
+    check = report.checks[0]
+    assert check.status == WARN
+    assert "尚未添加媒体库" in check.detail
+
+
+def test_media_paths_empty_table_is_warn(tmp_path, monkeypatch):
+    db = tmp_path / "app.db"
+    engine = create_engine(f"sqlite:///{db}")
+    Base.metadata.create_all(engine)  # 建表但无记录
+    engine.dispose()
+    _patch_store_db(monkeypatch, db)
+    report = DoctorReport()
+    check_media_paths(report)
+    assert report.checks[0].status == WARN
+    assert "媒体库" in report.checks[0].fix
+
+
+def test_media_paths_reads_library_table(tmp_path, monkeypatch):
+    db = tmp_path / "app.db"
+    engine = create_engine(f"sqlite:///{db}")
+    Base.metadata.create_all(engine)
+    good = tmp_path / "media"
+    good.mkdir()
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO media_library (root_path, name, scan_cron, scan_depth, enabled) "
+                 "VALUES (:p, '测试库', '0 3 * * *', 3, 1)"),
+            {"p": str(good)},
+        )
+        conn.execute(
+            text("INSERT INTO media_library (root_path, name, scan_cron, scan_depth, enabled) "
+                 "VALUES (:p, '禁用库', '0 3 * * *', 3, 0)"),
+            {"p": str(tmp_path / "disabled-nonexistent")},
+        )
+    engine.dispose()
+    _patch_store_db(monkeypatch, db)
+    report = DoctorReport()
+    check_media_paths(report)
+    check = report.checks[0]
+    assert check.status == OK, check.detail
+    # 禁用的库不应被检查（否则会因路径不存在而 FAIL）
+    assert "1 个媒体库路径可读写" in check.detail
+
+
+def test_media_paths_nonexistent_library_path_is_fail(tmp_path, monkeypatch):
+    db = tmp_path / "app.db"
+    engine = create_engine(f"sqlite:///{db}")
+    Base.metadata.create_all(engine)
+    missing = tmp_path / "not-exists"
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO media_library (root_path, name, scan_cron, scan_depth, enabled) "
+                 "VALUES (:p, '缺失路径库', '0 3 * * *', 3, 1)"),
+            {"p": str(missing)},
+        )
+    engine.dispose()
+    _patch_store_db(monkeypatch, db)
+    report = DoctorReport()
+    check_media_paths(report)
+    check = report.checks[0]
+    assert check.status == FAIL
+    assert "不存在" in check.detail
