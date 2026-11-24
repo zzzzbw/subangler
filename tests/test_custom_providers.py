@@ -101,6 +101,119 @@ def test_assrt_invalid_token():
     client.close()
 
 
+def _assrt_season_pack() -> dict:
+    """模拟 ASSRT 的「全季合集」响应：一个 sub 内含多集字幕文件。"""
+    names = [
+        "Fallout (2024) - S01E01 - The End.chs.srt",
+        "Fallout (2024) - S01E02 - The Target.chs.srt",
+        "Fallout (2024) - S01E03 - The Head.chs.srt",
+    ]
+    return {
+        "status": 0,
+        "sub": {"subs": [{
+            "id": 718018,
+            "native_name": "辐射 第一季 Fallout (2024)",
+            "videoname": "辐射第一季全8集 Fallout (2024) S1 中文字幕",
+            "subtype": "Subrip(srt)", "revision": 0, "vote_score": 0, "size": 100000,
+            "lang": {"desc": "简", "langlist": {"langchs": True}},
+            "filelist": [
+                {"f": n, "s": "30KB", "url": f"https://file0.assrt.net/onthefly/718018/-/{i}/{i}.srt?api=1"}
+                for i, n in enumerate(names)
+            ],
+        }]},
+    }
+
+
+def test_assrt_search_scores_each_file_in_season_pack():
+    data = _assrt_season_pack()
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=data)))
+    provider = AssrtProvider("test-token", client=client)
+    video = {"name": "Fallout - S01E02.mkv", "title": "Fallout", "year": 2024,
+             "season": 1, "episode": 2, "frame_rate": 24.0}
+    cands = provider.search(video, "zh")
+    client.close()
+
+    assert len(cands) == 3  # 每个单文件一个候选
+    best = max(cands, key=lambda c: c.score)
+    assert "S01E02" in best.release_name
+    assert best.external_id == "718018|1"
+    assert best.extra["file_index"] == 1
+    assert best.extra["file_name"].endswith("S01E02 - The Target.chs.srt")
+    assert best.score_breakdown["episode"] == 30
+    assert best.score >= 60  # 现在能过阈值
+
+
+def test_assrt_search_keeps_best_language_variant_per_episode():
+    data = _assrt_season_pack()
+    # 同一集追加 cht / 双语变体，应只保留得分最高的一条
+    fl = data["sub"]["subs"][0]["filelist"]
+    fl.append({"f": "Fallout (2024) - S01E02 - The Target.cht.srt", "s": "30KB", "url": "https://x/cht.srt"})
+    fl.append({"f": "Fallout (2024) - S01E02 - The Target.chs&eng.ass", "s": "30KB", "url": "https://x/bi.ass"})
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=data)))
+    provider = AssrtProvider("test-token", client=client)
+    video = {"name": "Fallout - S01E02.mkv", "title": "Fallout", "year": 2024,
+             "season": 1, "episode": 2}
+    cands = provider.search(video, "zh")
+    client.close()
+    ep2 = [c for c in cands if "S01E02" in c.release_name]
+    assert len(ep2) == 1  # 同集多语言变体归并
+
+
+def test_assrt_search_excludes_other_languages_in_multilang_pack():
+    data = _assrt_season_pack()
+    fl = data["sub"]["subs"][0]["filelist"]
+    fl.append({"f": "Fallout (2024) - S01E02 - The Target.spa.srt", "s": "30KB", "url": "https://x/spa.srt"})
+    fl.append({"f": "Fallout (2024) - S01E02 - The Target.fre.srt", "s": "30KB", "url": "https://x/fre.srt"})
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=data)))
+    provider = AssrtProvider("test-token", client=client)
+    video = {"name": "Fallout - S01E02.mkv", "title": "Fallout", "year": 2024,
+             "season": 1, "episode": 2}
+    cands = provider.search(video, "zh")
+    client.close()
+    assert all("spa" not in c.release_name and "fre" not in c.release_name for c in cands)
+
+
+def test_assrt_download_uses_file_index():
+    detail = json.loads(fixture("assrt_detail.json"))
+    # 造两个文件，验证按 index=1 精确取第二个
+    fl = detail["sub"]["subs"][0]["filelist"]
+    fl.append({"f": "Furious.S01E02.zh.srt", "url": "https://file0.assrt.net/onthefly/684213/-/2/second.srt?api=1"})
+    fetched: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/v1/sub/detail" in str(request.url):
+            return httpx.Response(200, json=detail)
+        fetched.append(str(request.url))
+        return httpx.Response(200, content="1\n00:00:01,000 --> 00:00:02,000\n你好\n".encode("utf-8"))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = AssrtProvider("test-token", client=client)
+    cand = Candidate(provider="assrt", external_id="684213|1", language="zh",
+                     release_name="Furious.S01E02.zh.srt",
+                     extra={"sub_id": "684213", "file_index": 1,
+                            "file_name": "Furious.S01E02.zh.srt"})
+    result = provider.download(cand)
+    client.close()
+    assert len(fetched) == 1
+    assert "/-/2/second.srt" in fetched[0]  # 命中第二个文件，不是第一个
+    assert b"\xe4\xbd\xa0\xe5\xa5\xbd" in result.content
+    assert result.ext == ".srt"
+
+
+def test_assrt_download_falls_back_for_legacy_candidate():
+    detail = json.loads(fixture("assrt_detail.json"))
+    client = httpx.Client(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, json=detail) if "/detail" in str(r.url)
+        else httpx.Response(200, content=b"legacy-content")
+    ))
+    provider = AssrtProvider("test-token", client=client)
+    cand = Candidate(provider="assrt", external_id="684213", language="zh",
+                     release_name="Furious.S01E01")  # 旧候选：无 extra
+    result = provider.download(cand)
+    client.close()
+    assert result.content == b"legacy-content"
+
+
 # ---------------- SubDL ----------------
 
 def test_subdl_search_bearer_auth():

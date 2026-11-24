@@ -13,9 +13,12 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
 import httpx
+from guessit import guessit
 
 from ...core.provider_base import (
     Candidate,
@@ -32,6 +35,28 @@ _LANG_HINTS = {
     "zh": ("zh", "chi", "chs", "cht", "cn", "简", "繁", "中", "双", "国", "普通话"),
     "en": ("en", "eng", "英"),
 }
+
+# 字幕文件扩展名：filelist 里只把这些后缀当可下载字幕。
+_SUB_EXTS = {".srt", ".ass", ".ssa", ".vtt"}
+# macOS 资源叉文件（._ 开头）不是字幕。
+_SKIP_FILE_PREFIXES = ("._",)
+
+# filelist 单文件语言判定：用于把「37 种语言包」里真正匹配目标语言的文件挑出来，
+# 避免为一个视频生成 37 个同分候选。按 token 匹配，防止 en 命中 silence 之类。
+_FILE_LANG_TOKENS = {
+    "zh": ("chs", "chi", "sc", "zh", "hans", "简体", "简中", "简", "繁体", "繁中", "繁", "中", "cn", "国"),
+    "en": ("eng", "en", "english", "英文", "英"),
+}
+_LANG_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _safe_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class AssrtProvider(ProviderAdapter):
@@ -104,6 +129,56 @@ class AssrtProvider(ProviderAdapter):
         hints = _LANG_HINTS.get(language, (language,))
         return any(h in blob for h in hints)
 
+    @staticmethod
+    def _subtitle_files(sub: dict[str, Any]) -> list[tuple[int, str]]:
+        """返回 filelist 里可下载的字幕文件：(下标, 文件名)。"""
+        result: list[tuple[int, str]] = []
+        for index, item in enumerate(sub.get("filelist") or []):
+            if not isinstance(item, dict):
+                continue
+            filename = str(item.get("f") or "")
+            if not filename or filename.startswith(_SKIP_FILE_PREFIXES):
+                continue
+            if Path(filename).suffix.lower() not in _SUB_EXTS:
+                continue
+            result.append((index, filename))
+        return result
+
+    @staticmethod
+    def _file_language_ok(filename: str, language: str) -> bool:
+        """判断单个字幕文件是否匹配目标语言；识别不出语言时保守保留。"""
+        lowered = filename.lower()
+        tokens = set(_LANG_TOKEN_RE.findall(lowered))
+        # 中文关键词本身可能被切成多段（如 chs&eng -> chs, eng），先直接查子串。
+        hints = _FILE_LANG_TOKENS.get(language, (language,))
+        if any(h in lowered for h in hints):
+            return True
+        # 出现了明确的其他语言标记则排除，避免 37 语言包生成一堆无关候选。
+        other_langs = {"spa", "fre", "fra", "ger", "deu", "ita", "por", "rus", "jap", "kor",
+                       "ara", "heb", "hin", "hun", "ind", "baq", "glg", "gre", "nld", "swe",
+                       "nor", "dan", "fin", "tha", "vie", "tur", "pol", "ces", "ron", "ell"}
+        if tokens & other_langs:
+            return False
+        return True
+
+    def _candidate_from_sub(
+        self, sub: dict[str, Any], language: str, query: str,
+        video: dict[str, Any], release: str, external_id: str,
+        extra: dict[str, Any],
+    ) -> Candidate:
+        cand = Candidate(
+            provider=self.name,
+            external_id=external_id,
+            language=language,
+            release_name=release,
+            subtype=str(sub.get("subtype") or ""),
+            lang_desc=str((sub.get("lang") or {}).get("desc") or ""),
+            vote_score=_safe_int(sub.get("vote_score")) or 0,
+            size=_safe_int(sub.get("size")),
+            extra=extra,
+        )
+        return self.scorer.score(cand, video)
+
     def search(self, video: dict[str, Any], language: str) -> list[Candidate]:
         query = self._video_query(video)
         if len(query) < 3:
@@ -119,35 +194,96 @@ class AssrtProvider(ProviderAdapter):
             sid = str(sub.get("id") or "")
             if not sid:
                 continue
-            release = str(sub.get("videoname") or sub.get("native_name") or query)
-            cand = Candidate(
-                provider=self.name,
-                external_id=sid,
-                language=language,
-                release_name=release,
-                subtype=str(sub.get("subtype") or ""),
-                lang_desc=str((sub.get("lang") or {}).get("desc") or ""),
-                vote_score=int(sub.get("vote_score") or 0),
-                size=int(sub.get("size") or 0) or None,
-                extra={"native_name": sub.get("native_name"), "revision": sub.get("revision")},
-            )
-            candidates.append(self.scorer.score(cand, video))
+            base_extra = {
+                "native_name": sub.get("native_name"),
+                "revision": sub.get("revision"),
+            }
+            files = self._subtitle_files(sub)
+            if not files:
+                # 兼容旧响应：没有 filelist 时按整个字幕条目评分（旧行为）。
+                release = str(sub.get("videoname") or sub.get("native_name") or query)
+                candidates.append(self._candidate_from_sub(
+                    sub, language, query, video, release, sid, dict(base_extra),
+                ))
+                continue
+            # 按 filelist 里的单个字幕文件评分，才能识别「全季合集」里的具体集数。
+            # 同一条目内常含 chs/cht/双语等多个语言变体，按 (季, 集) 归并只留最高分，
+            # 避免候选页出现大量重复文件（如 37 语言包）。
+            best: dict[tuple[Any, ...], Candidate] = {}
+            for index, filename in files:
+                if not self._file_language_ok(filename, language):
+                    continue
+                extra = dict(base_extra)
+                extra.update({"sub_id": sid, "file_index": index, "file_name": filename})
+                cand = self._candidate_from_sub(
+                    sub, language, query, video, filename, f"{sid}|{index}", extra,
+                )
+                key = self._episode_key(filename)
+                prior = best.get(key)
+                if prior is None or cand.score > prior.score:
+                    best[key] = cand
+            candidates.extend(best.values())
         return candidates
 
+    @staticmethod
+    def _episode_key(filename: str) -> tuple[Any, ...]:
+        """用 guessit 解析出的季/集作为归并键；解析不出则回退文件名。"""
+        try:
+            info = guessit(filename)
+        except Exception:  # noqa: BLE001 - guessit 对异常文件名可能抛错
+            return ("raw", filename.lower())
+        season = info.get("season")
+        episodes = info.get("episode")
+        if isinstance(episodes, (list, tuple)):
+            episode = episodes[0] if episodes else None
+        else:
+            episode = episodes
+        if season is None and episode is None:
+            return ("raw", filename.lower())
+        return ("ep", season, episode)
+
     def download(self, candidate: Candidate) -> DownloadedSubtitle:
-        data = self._request("/v1/sub/detail", {"id": candidate.external_id})
+        # detail 接口的 id 必须是纯字幕条目 id。新候选带 sub_id；
+        # external_id 形如 "718018|7"，旧候选则是纯 id，都做兼容。
+        raw_id = str(candidate.extra.get("sub_id") or candidate.external_id)
+        sub_id = raw_id.split("|", 1)[0]
+        data = self._request("/v1/sub/detail", {"id": sub_id})
         subs = ((data.get("sub") or {}).get("subs") or [])
         if not subs:
             raise ProviderError("ASSRT 详情为空")
         detail = subs[0]
         filelist = detail.get("filelist") or []
-        # 优先直接字幕文件（避免压缩包解压与编码问题）
+
+        # 优先按候选记录的文件标识精确下载对应那一集。
+        file_index = candidate.extra.get("file_index")
+        file_name = str(candidate.extra.get("file_name") or "")
+        if file_index is not None or file_name:
+            try:
+                idx = int(file_index)
+            except (TypeError, ValueError):
+                idx = -1
+            target = None
+            if 0 <= idx < len(filelist) and isinstance(filelist[idx], dict):
+                target = filelist[idx]
+            if target is None and file_name:
+                target = next(
+                    (it for it in filelist
+                     if isinstance(it, dict) and str(it.get("f") or "") == file_name),
+                    None,
+                )
+            if target is not None:
+                url = target.get("url")
+                filename = str(target.get("f") or file_name)
+                if url and Path(filename).suffix.lower() in _SUB_EXTS:
+                    return DownloadedSubtitle.from_bytes(self._fetch(url), filename)
+
+        # 兼容旧候选：没有文件标识时取第一个可下载字幕文件。
         for item in filelist:
+            if not isinstance(item, dict):
+                continue
             url = item.get("url")
             filename = str(item.get("f") or "")
-            from pathlib import Path
-
-            if not url or Path(filename).suffix.lower() not in {".srt", ".ass", ".ssa", ".vtt"}:
+            if not url or Path(filename).suffix.lower() not in _SUB_EXTS:
                 continue
             return DownloadedSubtitle.from_bytes(self._fetch(url), filename)
         url = detail.get("url")
