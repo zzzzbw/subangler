@@ -122,6 +122,44 @@ def test_test_connection_assrt_uses_quota_endpoint(client, monkeypatch):
     assert "配额" in body["detail"]
 
 
+def test_delete_library_cascades_dependents(client):
+    """删除媒体库时需按外键依赖顺序清理字幕/候选/决策日志，否则报 FOREIGN KEY 错误。"""
+    from sqlalchemy import create_engine, select, text
+    from sqlalchemy.orm import sessionmaker
+    from subangler.config import get_config_store
+    from subangler.core.models import Base, CandidateRow, DecisionLog, MediaLibrary, Subtitle, Video
+
+    client.post("/api/auth/login", json={"username": "admin", "password": "test-password-123"})
+    resp = client.post("/api/libraries", json={"root_path": "/media/test-lib", "name": "test"})
+    assert resp.status_code == 201
+    lib_id = resp.json()["id"]
+
+    # 直接向同一 DB 造关联数据（含外键引用）
+    engine = create_engine(f"sqlite:///{get_config_store().db_path}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    with Session() as s:
+        s.execute(text("PRAGMA foreign_keys=ON"))
+        v = Video(library_id=lib_id, path="/media/test-lib/a.mkv")
+        s.add(v)
+        s.flush()
+        s.add(Subtitle(video_id=v.id, language="zh", path="/media/test-lib/a.zh.srt"))
+        s.add(CandidateRow(video_id=v.id, language="en", provider="assrt",
+                           external_id="x1", release_name="A.S01E01"))
+        s.add(DecisionLog(video_id=v.id, step="scan_file", reason="/media/test-lib/a.mkv"))
+        s.commit()
+
+    resp = client.delete(f"/api/libraries/{lib_id}")
+    assert resp.status_code == 200
+
+    with Session() as s:
+        assert s.execute(select(MediaLibrary).where(MediaLibrary.id == lib_id)).scalar_one_or_none() is None
+        assert s.execute(select(Video).where(Video.library_id == lib_id)).scalars().all() == []
+        assert s.execute(select(Subtitle)).scalars().all() == []
+        assert s.execute(select(CandidateRow)).scalars().all() == []
+        assert s.execute(select(DecisionLog)).scalars().all() == []
+
+
 @pytest.fixture
 def client():
     with TestClient(app) as c:

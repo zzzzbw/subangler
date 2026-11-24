@@ -81,6 +81,25 @@ def test_unified_scorer_breakdown():
     assert bad.score < cand.score
 
 
+def test_unified_scorer_tolerates_dirty_numeric_fields():
+    """脏数据把剧名写进 season 时不应崩溃（曾导致 ASSRT 整个源搜索失败）。"""
+    scorer = UnifiedScorer()
+    dirty_video = {
+        "name": "辐射 - S01E02 - 第2集.mp4",
+        "title": "辐射",
+        "year": "辐射",          # 非数字
+        "season": "辐射",        # 非数字：历史上 series 被误写进 season
+        "episode": 2,
+    }
+    cand = Candidate(provider="assrt", external_id="1", language="zh",
+                     release_name="Fallout.S01E02.1080p.WEB-DL.x264-GROUP")
+    # 不应抛 ValueError
+    scorer.score(cand, dirty_video)
+    assert cand.score_breakdown["season"] == 0
+    assert cand.score_breakdown["year"] == 0
+    assert cand.score_breakdown["episode"] == 30
+
+
 def test_orchestrator_routes_custom_provider(quota_db, tmp_path):
     quota = QuotaManager(str(quota_db))
     fake = FakeProvider([Candidate(provider="assrt", external_id="c1", language="zh",

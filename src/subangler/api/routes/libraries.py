@@ -8,7 +8,7 @@ from sqlalchemy import delete, select
 
 from ...auth import require_user
 from ...config import get_config_store
-from ...core.models import Job, MediaLibrary, Video
+from ...core.models import CandidateRow, DecisionLog, Job, MediaLibrary, Subtitle, Video
 from ...worker.tasks import TaskContext
 
 router = APIRouter(prefix="/api/libraries", tags=["libraries"], dependencies=[Depends(require_user)])
@@ -70,6 +70,14 @@ def trigger_scan(library_id: int) -> dict:
 def delete_library(library_id: int) -> dict:
     ctx = _ctx()
     with ctx.SessionLocal() as session:
+        if not session.get(MediaLibrary, library_id):
+            raise HTTPException(status_code=404, detail="媒体库不存在")
+        # SQLite 开启外键（PRAGMA foreign_keys=ON），需按依赖顺序清理，
+        # 否则直接删 video 会被 subtitle/candidate/decision_log 的外键挡住。
+        video_ids = select(Video.id).where(Video.library_id == library_id)
+        session.execute(delete(Subtitle).where(Subtitle.video_id.in_(video_ids)))
+        session.execute(delete(CandidateRow).where(CandidateRow.video_id.in_(video_ids)))
+        session.execute(delete(DecisionLog).where(DecisionLog.video_id.in_(video_ids)))
         session.execute(delete(Video).where(Video.library_id == library_id))
         session.execute(delete(MediaLibrary).where(MediaLibrary.id == library_id))
         session.commit()

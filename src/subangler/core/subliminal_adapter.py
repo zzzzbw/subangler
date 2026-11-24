@@ -187,7 +187,7 @@ def video_to_dict(video: Video) -> dict[str, Any]:
         "name": video.name,
         "title": getattr(video, "title", None),
         "year": getattr(video, "year", None),
-        "season": getattr(video, "series", None),
+        "season": getattr(video, "season", None),
         "episode": _first_episode(video),
         "hashes": hashes,
         "frame_rate": getattr(video, "frame_rate", None),

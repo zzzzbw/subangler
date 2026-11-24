@@ -182,6 +182,16 @@ def _year_of(video: dict[str, Any]) -> int | None:
         return None
 
 
+def _safe_int(value: Any) -> int | None:
+    """宽松转整数；无法转换（如脏数据把剧名写进 season）时返回 None。"""
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class UnifiedScorer:
     """基于 guessit 的统一评分器，产出可解释的 score_breakdown。
 
@@ -213,8 +223,10 @@ class UnifiedScorer:
         else:
             got_episode = got_episodes
 
-        breakdown["season"] = self.WEIGHTS["season"] if (want_season and got_season and int(want_season) == int(got_season)) else 0
-        breakdown["episode"] = self.WEIGHTS["episode"] if (want_episode and got_episode and int(want_episode) == int(got_episode)) else 0
+        want_season_i, got_season_i = _safe_int(want_season), _safe_int(got_season)
+        want_episode_i, got_episode_i = _safe_int(want_episode), _safe_int(got_episode)
+        breakdown["season"] = self.WEIGHTS["season"] if (want_season_i is not None and got_season_i is not None and want_season_i == got_season_i) else 0
+        breakdown["episode"] = self.WEIGHTS["episode"] if (want_episode_i is not None and got_episode_i is not None and want_episode_i == got_episode_i) else 0
 
         want_title = _norm(video.get("title") or Path(video.get("name", "")).stem)
         got_title = _norm(info.get("title", ""))
@@ -226,8 +238,8 @@ class UnifiedScorer:
         else:
             breakdown["title"] = 0
 
-        wy, gy = _year_of(video), info.get("year")
-        breakdown["year"] = self.WEIGHTS["year"] if (wy and gy and abs(int(wy) - int(gy)) <= 1) else 0
+        wy, gy = _year_of(video), _safe_int(info.get("year"))
+        breakdown["year"] = self.WEIGHTS["year"] if (wy is not None and gy is not None and abs(wy - gy) <= 1) else 0
 
         want_fps = video.get("frame_rate")
         if want_fps and candidate.fps:
