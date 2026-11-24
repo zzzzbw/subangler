@@ -23,6 +23,7 @@ export default function Settings({ push }: { push: ToastPush }) {
   const [activeGroup, setActiveGroup] = useState('general')
   const [draft, setDraft] = useState<Record<string, unknown>>({})
   const [revealed, setRevealed] = useState<Set<string>>(new Set())
+  const [revealedValues, setRevealedValues] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [audit, setAudit] = useState<ConfigAuditItem[]>([])
   const [health, setHealth] = useState<HealthReport | null>(null)
@@ -34,7 +35,7 @@ export default function Settings({ push }: { push: ToastPush }) {
       setItems(r.items); setVersion(r.version)
       const d: Record<string, unknown> = {}
       r.items.forEach((i) => { d[i.key] = i.value })
-      setDraft(d); setError('')
+      setDraft(d); setRevealed(new Set()); setRevealedValues({}); setError('')
     } catch (e) { setError((e as Error).message) }
   }, [])
   useEffect(() => { load() }, [load])
@@ -50,7 +51,33 @@ export default function Settings({ push }: { push: ToastPush }) {
     return items.some((i) => JSON.stringify(draft[i.key]) !== JSON.stringify(i.value))
   }, [items, draft])
 
-  function setField(key: string, value: unknown) { setDraft((d) => ({ ...d, [key]: value })) }
+  function setField(key: string, value: unknown) {
+    setDraft((d) => ({ ...d, [key]: value }))
+    // 用户重新输入后，以草稿为准，不再用按需取回的明文覆盖。
+    if (revealedValues[key] !== undefined) {
+      setRevealedValues((prev) => { const next = { ...prev }; delete next[key]; return next })
+    }
+  }
+
+  async function toggleReveal(item: ConfigItem) {
+    if (revealed.has(item.key)) {
+      setRevealed((s) => { const n = new Set(s); n.delete(item.key); return n })
+      setRevealedValues((prev) => { const next = { ...prev }; delete next[item.key]; return next })
+      return
+    }
+    const current = String(draft[item.key] ?? '')
+    // 草稿里已经是用户新填的明文（不含掩码），直接切换显示，不必取库里的旧值。
+    if (current && !current.includes('****')) {
+      setRevealedValues((prev) => ({ ...prev, [item.key]: current }))
+      setRevealed((s) => new Set(s).add(item.key))
+      return
+    }
+    try {
+      const r = await api.post<{ value: string }>('/api/config/reveal', { key: item.key })
+      setRevealedValues((prev) => ({ ...prev, [item.key]: r.value || '' }))
+      setRevealed((s) => new Set(s).add(item.key))
+    } catch (e) { push((e as Error).message, 'error') }
+  }
 
   async function save() {
     if (!dirty) return
@@ -67,8 +94,15 @@ export default function Settings({ push }: { push: ToastPush }) {
   }
 
   async function testCredential(provider: string, key: string) {
-    const value = String(draft[key] || '')
-    if (!value || value === '****') { push('请先填写凭证', 'error'); return }
+    let value = String(draft[key] || '')
+    // 已保存的敏感项在列表里只有掩码，测试前按需取回明文，避免拿 "gAA****pl" 去请求。
+    if (!value || value.includes('****')) {
+      try {
+        const r = await api.post<{ value: string }>('/api/config/reveal', { key })
+        value = r.value || ''
+      } catch { value = '' }
+    }
+    if (!value) { push('请先填写凭证', 'error'); return }
     setTestState((s) => ({ ...s, [key]: '测试中…' }))
     const body: Record<string, string> = { provider }
     if (provider === 'assrt') body.token = value; else body.api_key = value
@@ -149,7 +183,8 @@ export default function Settings({ push }: { push: ToastPush }) {
                 {groupItems.map((item) => (
                   <ConfigField key={item.key} item={item} value={draft[item.key]}
                     revealed={revealed.has(item.key)}
-                    onReveal={() => setRevealed((s) => { const n = new Set(s); n.has(item.key) ? n.delete(item.key) : n.add(item.key); return n })}
+                    revealedValue={revealedValues[item.key]}
+                    onReveal={() => toggleReveal(item)}
                     onChange={(v) => setField(item.key, v)}
                     testProvider={credentialTestMap[item.key]}
                     testState={testState[item.key]}
@@ -203,12 +238,13 @@ export default function Settings({ push }: { push: ToastPush }) {
   )
 }
 
-function ConfigField({ item, value, revealed, onReveal, onChange, testProvider, testState, onTest, onTestFlare }: {
-  item: ConfigItem; value: unknown; revealed: boolean; onReveal: () => void
+function ConfigField({ item, value, revealed, revealedValue, onReveal, onChange, testProvider, testState, onTest, onTestFlare }: {
+  item: ConfigItem; value: unknown; revealed: boolean; revealedValue?: string; onReveal: () => void
   onChange: (v: unknown) => void; testProvider?: string; testState?: string; onTest: () => void
   onTestFlare?: () => void
 }) {
   const hideValue = item.sensitive && !revealed && item.masked
+  const shownValue = hideValue ? '****' : (item.sensitive && revealed ? (revealedValue ?? String(value ?? '')) : String(value ?? ''))
   let control: React.ReactNode
 
   if (item.value_type === 'bool') {
@@ -226,7 +262,7 @@ function ConfigField({ item, value, revealed, onReveal, onChange, testProvider, 
     control = (
       <div className="row-gap">
         <input className="config-input" type={hideValue ? 'password' : 'text'}
-          value={hideValue ? '****' : String(value ?? '')}
+          value={shownValue}
           placeholder="未设置"
           onChange={(e) => onChange(e.target.value)} />
         <button className="btn btn-sm btn-ghost" onClick={onReveal}>{revealed ? '隐藏' : '显示'}</button>

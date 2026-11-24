@@ -76,6 +76,52 @@ def test_secret_masked_via_api(client):
     assert item["masked"] is True
 
 
+def test_reveal_secret_requires_login(client):
+    resp = client.post("/api/config/reveal", json={"key": "credentials.assrt_token"})
+    assert resp.status_code == 401
+
+
+def test_reveal_secret_returns_plaintext(client):
+    client.post("/api/auth/login", json={"username": "admin", "password": "test-password-123"})
+    client.patch("/api/config", json={"values": {"credentials.assrt_token": "secret-token-xyz"}})
+
+    resp = client.post("/api/config/reveal", json={"key": "credentials.assrt_token"})
+    assert resp.status_code == 200
+    assert resp.json()["value"] == "secret-token-xyz"
+    assert resp.json()["configured"] is True
+
+    resp = client.post("/api/config/reveal", json={"key": "providers.min_score"})
+    assert resp.status_code == 400
+
+
+def test_test_connection_assrt_uses_quota_endpoint(client, monkeypatch):
+    import subangler.api.routes.config as cfg_routes
+
+    class _Resp:
+        status_code = 200
+        text = '{"status":0,"user":{"result":"succeed","quota":20}}'
+
+        def json(self):
+            return {"status": 0, "user": {"result": "succeed", "quota": 20}}
+
+    captured = {}
+
+    def fake_get(url, headers=None, timeout=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        return _Resp()
+
+    monkeypatch.setattr(cfg_routes.httpx, "get", fake_get)
+    client.post("/api/auth/login", json={"username": "admin", "password": "test-password-123"})
+    resp = client.post("/api/config/test-connection", json={"provider": "assrt", "token": "my-token"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert captured["url"].endswith("/v1/user/quota")
+    assert captured["headers"]["Authorization"] == "Bearer my-token"
+    assert "配额" in body["detail"]
+
+
 @pytest.fixture
 def client():
     with TestClient(app) as c:

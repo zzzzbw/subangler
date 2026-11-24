@@ -38,6 +38,10 @@ class TestFlareSolverrRequest(BaseModel):
     url: str
 
 
+class RevealRequest(BaseModel):
+    key: str
+
+
 def _item(key: str, entry: Any, store: Any) -> ConfigItem:
     value = store.get(key)
     return ConfigItem(
@@ -84,6 +88,18 @@ def import_config(values: dict[str, Any], user: dict = Depends(require_user)) ->
     return {"imported": get_config_store().import_config(values, operator=user["username"])}
 
 
+@router.post("/reveal")
+def reveal_config(payload: RevealRequest) -> dict[str, Any]:
+    """按需返回敏感配置明文；列表接口永远只给掩码。"""
+    entry = DEFAULTS.get(payload.key)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="未知配置项")
+    if not entry.sensitive:
+        raise HTTPException(status_code=400, detail="该配置项不是敏感项")
+    value = get_config_store().get_secret(payload.key)
+    return {"key": payload.key, "value": value, "configured": bool(value)}
+
+
 @router.post("/test-flaresolverr")
 def test_flaresolverr(payload: TestFlareSolverrRequest) -> dict[str, Any]:
     """探测填写的 FlareSolverr 地址是否可用；仅提示，不写库、不拦截保存。"""
@@ -94,10 +110,16 @@ def test_flaresolverr(payload: TestFlareSolverrRequest) -> dict[str, Any]:
 @router.post("/test-connection")
 def test_connection(payload: TestConnectionRequest) -> dict[str, Any]:
     """用传入凭证做一次最小请求，不写库。"""
+    store = get_config_store()
+    assrt_base = str(store.get("providers.assrt_base_url") or "https://api.assrt.net").rstrip("/")
+    subdl_base = str(store.get("providers.subdl_base_url") or "https://api.subdl.com").rstrip("/")
+    api_key = (payload.api_key or "").strip()
+    token = (payload.token or "").strip()
+    # ASSRT 官方文档只有 /v1/user/quota，没有 /v1/user/info；认证支持 Authorization: Bearer。
     endpoints = {
-        "opensubtitles_com": ("https://api.opensubtitles.com/api/v1/languages", "Api-Key", payload.api_key),
-        "subdl": ("https://api.subdl.com/api/v1/languages", "X-Api-Key", payload.api_key),
-        "assrt": ("https://api.assrt.net/v1/user/info", "Authorization", payload.token),
+        "opensubtitles_com": ("https://api.opensubtitles.com/api/v1/languages", "Api-Key", api_key),
+        "subdl": (f"{subdl_base}/api/v1/languages", "X-Api-Key", api_key),
+        "assrt": (f"{assrt_base}/v1/user/quota", "Authorization", f"Bearer {token}" if token else ""),
     }
     if payload.provider not in endpoints:
         raise HTTPException(status_code=400, detail=f"不支持的 Provider: {payload.provider}")
@@ -109,8 +131,20 @@ def test_connection(payload: TestConnectionRequest) -> dict[str, Any]:
         resp = httpx.get(url, headers=headers, timeout=12)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "status_code": None, "detail": str(exc)}
-    return {
-        "ok": resp.status_code == 200,
-        "status_code": resp.status_code,
-        "detail": "连接成功" if resp.status_code == 200 else resp.text[:200],
-    }
+
+    ok = resp.status_code == 200
+    detail = "连接成功"
+    if payload.provider == "assrt":
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {}
+        status = data.get("status", 0)
+        ok = ok and status == 0
+        if not ok:
+            detail = str(data.get("errmsg") or resp.text[:200] or f"ASSRT 返回 status={status}")
+        elif data.get("user", {}).get("quota") is not None:
+            detail = f"连接成功，剩余配额 {data['user']['quota']}"
+    elif not ok:
+        detail = resp.text[:200]
+    return {"ok": ok, "status_code": resp.status_code, "detail": detail}
