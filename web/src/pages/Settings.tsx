@@ -8,7 +8,6 @@ type ToastPush = ReturnType<typeof useToasts>['push']
 type Group = { key: string; label: string; icon: string; match: (k: string) => boolean }
 const GROUPS: Group[] = [
   { key: 'general', label: '通用', icon: '⚙', match: (k) => k.startsWith('general.') },
-  { key: 'library', label: '媒体库', icon: '▤', match: (k) => k.startsWith('library.') },
   { key: 'providers', label: '字幕源', icon: '☷', match: (k) => k.startsWith('providers.') },
   { key: 'credentials', label: '凭证', icon: '🔑', match: (k) => k.startsWith('credentials.') },
   { key: 'output', label: '落盘', icon: '▣', match: (k) => k.startsWith('output.') },
@@ -296,7 +295,6 @@ function ConfigField({ item, value, revealed, revealedValue, onReveal, onChange,
 
 // 审计展示：配置 key 翻译成中文名，值做截断，避免整条数组刷屏。
 const AUDIT_KEY_LABELS: Record<string, string> = {
-  'library.scan_cron': '默认扫描周期',
   'providers.enabled': '启用的字幕源',
   'providers.priority': '字幕源优先级',
   'providers.language_order': '语言路由顺序',

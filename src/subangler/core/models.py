@@ -15,6 +15,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    inspect,
+    text,
 )
 from sqlalchemy.orm import declarative_base
 
@@ -29,6 +31,8 @@ class MediaLibrary(Base):
     name = Column(String(128), nullable=False, default="")
     scan_cron = Column(String(64), nullable=False, default="0 3 * * *")
     scan_depth = Column(Integer, nullable=False, default=3)
+    # JSON 数组字符串：glob 规则，如 ["*sample*", "*/@eaDir/*"]，命中路径则跳过。
+    exclude_patterns = Column(Text, nullable=False, default="[]", server_default="[]")
     enabled = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
@@ -142,3 +146,20 @@ class CandidateRow(Base):
     lang_desc = Column(String(128), nullable=True)
     status = Column(String(16), nullable=False, default="pending", index=True)  # pending | installed | ignored
     created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+def ensure_schema(engine) -> None:
+    """在 create_all 之后补齐新增列，保证已有数据库升级不丢数据。
+
+    SQLAlchemy 的 create_all 只建缺失的表，不会给已有表 ALTER 加列，
+    因此每次启动需显式检查 media_library 的新增字段。
+    """
+    inspector = inspect(engine)
+    if "media_library" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("media_library")}
+    if "exclude_patterns" not in columns:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE media_library ADD COLUMN exclude_patterns TEXT NOT NULL DEFAULT '[]'"
+            ))

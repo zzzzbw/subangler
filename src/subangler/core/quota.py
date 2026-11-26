@@ -15,7 +15,7 @@ from typing import Any
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
 
-from .models import Base, ProviderHealth, QuotaLedger as LedgerRow
+from .models import Base, ProviderHealth, QuotaLedger as LedgerRow, ensure_schema
 
 
 def _now() -> datetime:
@@ -40,6 +40,7 @@ class QuotaManager:
 
         self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
         Base.metadata.create_all(self.engine)
+        ensure_schema(self.engine)
         self.default_cooldown = default_cooldown_minutes
         self.failure_threshold = failure_threshold
         self._locks: dict[str, threading.Lock] = {}

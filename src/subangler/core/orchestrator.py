@@ -109,14 +109,17 @@ class DownloadOrchestrator:
         if self.on_decision:
             self.on_decision(record)
 
-    def scan_library(self, root: str | Path) -> list[dict[str, Any]]:
+    def scan_library(self, root: str | Path, *, scan_depth: int | None = None,
+                     exclude_patterns: list[str] | None = None) -> list[dict[str, Any]]:
         """扫描目录，返回视频信息字典（尚未入库）。
 
         refine 阶段（MediaInfo 解析 + 哈希）对每个视频都较耗时，大库可能持续
         数十分钟。这里按视频粒度上报进度（5%→95%，入库后由上层置 100%），
         让任务详情能实时显示进展，而不是全程 0% 看似卡死。
+
+        scan_depth / exclude_patterns 由每个媒体库独立配置，不传时走原生扫描。
         """
-        videos = self.kernel.scan(root)
+        videos = self.kernel.scan(root, scan_depth=scan_depth, exclude_patterns=exclude_patterns)
         total = len(videos)
         result = []
         for index, video in enumerate(videos, start=1):

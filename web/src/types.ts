@@ -34,6 +34,8 @@ export interface Library {
   root_path: string
   name: string
   scan_cron: string
+  scan_depth: number
+  exclude_patterns: string[]
   enabled: boolean
 }
 

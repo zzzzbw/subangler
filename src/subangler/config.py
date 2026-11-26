@@ -125,9 +125,7 @@ DEFAULTS: dict[str, ConfigEntry] = {
     "general.download_concurrency": ConfigEntry("general.download_concurrency", "int", False, 2, "并发下载数"),
     "general.search_mode": ConfigEntry("general.search_mode", "str", False, "parallel", "并行/串行搜索"),
     "general.log_level": ConfigEntry("general.log_level", "str", False, "INFO", "日志级别"),
-    "library.scan_cron": ConfigEntry("library.scan_cron", "str", False, "0 3 * * *", "每日扫描时间"),
-    "library.scan_depth": ConfigEntry("library.scan_depth", "int", False, 3, "扫描深度"),
-    "library.exclude_patterns": ConfigEntry("library.exclude_patterns", "json", False, [], "排除规则"),
+    # 媒体库的扫描配置已迁移到每个媒体库自身（media_library 表），不再作为全局项。
     "providers.enabled": ConfigEntry("providers.enabled", "json", False, ["opensubtitlescom", "subdl", "assrt"], "启用的字幕源"),
     "providers.priority": ConfigEntry("providers.priority", "json", False, [], "Provider 优先级"),
     "providers.language_order": ConfigEntry("providers.language_order", "json", False, {"zh": ["assrt", "zimuku", "opensubtitles"], "en": ["subdl", "opensubtitles_com", "gestdown"]}, "按语言路由的 Provider 顺序"),

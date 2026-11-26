@@ -9,8 +9,10 @@
 
 from __future__ import annotations
 
+import fnmatch
 import logging
-from datetime import timedelta
+import os
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -118,8 +120,18 @@ class SubliminalKernel:
         self._pool = None
 
     # ---- 扫描 ----
-    def scan(self, path: str | Path, *, age: timedelta | None = None) -> list[Video]:
-        return subliminal_scan_videos(str(path), age=age)
+    def scan(self, path: str | Path, *, age: timedelta | None = None,
+             scan_depth: int | None = None,
+             exclude_patterns: list[str] | None = None) -> list[Video]:
+        """扫描目录；scan_depth / exclude_patterns 由每个媒体库独立配置。
+
+        未传过滤条件时走 subliminal 原生扫描，保持 M1 行为不变。
+        """
+        if scan_depth is None and not exclude_patterns:
+            return subliminal_scan_videos(str(path), age=age)
+        return scan_videos_filtered(
+            str(path), age=age, scan_depth=scan_depth, exclude_patterns=exclude_patterns
+        )
 
     # ---- 元数据补全 ----
     def refine(self, video: Video, refiners: list[str] | None = None) -> Video:
@@ -157,6 +169,97 @@ def subliminal_scan_videos(path: str, *, age: timedelta | None = None) -> list[V
     from subliminal import scan_videos
 
     return list(scan_videos(path, age=age))
+
+
+def _match_excluded(rel_path: str, name: str, patterns: Iterable[str]) -> bool:
+    """排除规则：glob 风格，命中相对路径或文件名任一即跳过。
+
+    同时用正斜杠与反斜杠两种形式比较，兼容 Windows / NAS 路径填写习惯。
+    """
+    for raw in patterns:
+        pattern = str(raw).strip()
+        if not pattern:
+            continue
+        candidates = (rel_path, rel_path.replace("\\", "/"), name)
+        if any(fnmatch.fnmatch(c, pattern) for c in candidates):
+            return True
+    return False
+
+
+def collect_video_paths(
+    root: str | Path,
+    *,
+    scan_depth: int | None = None,
+    exclude_patterns: list[str] | None = None,
+) -> list[str]:
+    """按每库配置遍历目录，返回视频文件路径。
+
+    - scan_depth：相对根目录的最大层级，1 表示仅根目录；None 表示不限。
+    - exclude_patterns：glob 规则，命中相对路径/文件名即跳过该文件或整个子目录。
+    隐藏目录（.开头）与 sample 目录始终跳过，与 subliminal 原生行为一致。
+    """
+    from subliminal.video import VIDEO_EXTENSIONS
+
+    root_path = Path(root)
+    if not root_path.exists():
+        raise ValueError("路径不存在")
+    if not root_path.is_dir():
+        raise ValueError("路径不是目录")
+
+    patterns = [p for p in (exclude_patterns or []) if str(p).strip()]
+    max_depth = scan_depth if (scan_depth is not None and scan_depth >= 1) else None
+    found: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root_path):
+        current = Path(dirpath)
+        rel = current.relative_to(root_path)
+        rel_str = "." if str(rel) == "." else str(rel)
+        # 深度判断：根目录层级为 1
+        level = 1 if rel_str == "." else len(rel.parts) + 1
+        if max_depth is not None and level >= max_depth:
+            dirnames[:] = []
+
+        kept_dirs: list[str] = []
+        for dirname in dirnames:
+            if dirname.startswith(".") or dirname.lower() == "sample":
+                continue
+            dir_rel = dirname if rel_str == "." else str(rel / dirname)
+            if _match_excluded(dir_rel, dirname, patterns):
+                continue
+            kept_dirs.append(dirname)
+        dirnames[:] = kept_dirs
+
+        for filename in filenames:
+            if Path(filename).suffix.lower() not in VIDEO_EXTENSIONS:
+                continue
+            file_rel = filename if rel_str == "." else str(rel / filename)
+            if _match_excluded(file_rel, filename, patterns):
+                continue
+            found.append(str(current / filename))
+    return sorted(found)
+
+
+def scan_videos_filtered(
+    path: str | Path,
+    *,
+    age: timedelta | None = None,
+    scan_depth: int | None = None,
+    exclude_patterns: list[str] | None = None,
+) -> list[Video]:
+    """按深度/排除规则收集路径后，用 subliminal 解析成 Video（含字幕轨探测）。"""
+    from subliminal import scan_video
+
+    videos: list[Video] = []
+    for filepath in collect_video_paths(path, scan_depth=scan_depth, exclude_patterns=exclude_patterns):
+        if age is not None:
+            mtime = datetime.fromtimestamp(os.path.getmtime(filepath))
+            if datetime.now() - mtime > age:
+                continue
+        try:
+            videos.append(scan_video(filepath))
+        except ValueError:
+            logger.warning("扫描视频失败: %s", filepath)
+            continue
+    return videos
 
 
 def video_path(video: Video) -> str:

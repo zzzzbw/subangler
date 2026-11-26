@@ -165,6 +165,75 @@ def test_test_connection_without_credential_returns_400(client, monkeypatch):
     assert "凭证为空" in resp.json()["detail"]
 
 
+def test_library_crud_with_per_library_scan_config(client):
+    """每库独立保存 scan_cron / scan_depth / exclude_patterns / enabled。"""
+    client.post("/api/auth/login", json={"username": "admin", "password": "test-password-123"})
+
+    resp = client.post("/api/libraries", json={
+        "root_path": "/media/config-lib", "name": "测试库",
+        "scan_cron": "0 5 * * *", "scan_depth": 2,
+        "exclude_patterns": ["*sample*", "*.nfo"],
+    })
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["scan_cron"] == "0 5 * * *"
+    assert body["scan_depth"] == 2
+    assert body["exclude_patterns"] == ["*sample*", "*.nfo"]
+    lib_id = body["id"]
+
+    resp = client.get("/api/libraries")
+    item = next(x for x in resp.json()["items"] if x["id"] == lib_id)
+    assert item["scan_depth"] == 2
+    assert item["exclude_patterns"] == ["*sample*", "*.nfo"]
+
+    resp = client.patch(f"/api/libraries/{lib_id}", json={
+        "scan_cron": "30 6 * * *", "scan_depth": 4,
+        "exclude_patterns": ["*/@eaDir/*"], "enabled": False,
+    })
+    assert resp.status_code == 200
+    updated = resp.json()
+    assert updated["scan_cron"] == "30 6 * * *"
+    assert updated["scan_depth"] == 4
+    assert updated["exclude_patterns"] == ["*/@eaDir/*"]
+    assert updated["enabled"] is False
+
+    # 局部更新不覆盖其他字段
+    resp = client.patch(f"/api/libraries/{lib_id}", json={"name": "改名"})
+    assert resp.json()["scan_depth"] == 4
+    assert resp.json()["name"] == "改名"
+
+    assert client.patch("/api/libraries/999999", json={"name": "x"}).status_code == 404
+
+
+def test_library_scan_uses_per_library_config(client, monkeypatch):
+    """扫描任务应把每库的深度/排除规则传给 orchestrator。"""
+    from subangler.worker import tasks
+
+    client.post("/api/auth/login", json={"username": "admin", "password": "test-password-123"})
+    resp = client.post("/api/libraries", json={
+        "root_path": "/media/scan-config-lib", "scan_depth": 3,
+        "exclude_patterns": ["*sample*", "*.nfo"],
+    })
+    lib_id = resp.json()["id"]
+
+    captured = {}
+
+    class FakeOrch:
+        def scan_library(self, root, *, scan_depth=None, exclude_patterns=None):
+            captured.update(root=root, scan_depth=scan_depth, exclude_patterns=exclude_patterns)
+            return []
+
+    # 直接构造 TaskContext，避免 worker 线程；验证 run_scan_library 的取值逻辑。
+    from subangler.config import get_config_store
+    ctx = tasks.TaskContext(db_path=str(get_config_store().db_path), config_store=get_config_store())
+    monkeypatch.setattr(ctx, "orchestrator", lambda progress=None, job_id=None: FakeOrch())
+    tasks.run_scan_library(ctx, lib_id)
+
+    assert captured["root"] == "/media/scan-config-lib"
+    assert captured["scan_depth"] == 3
+    assert captured["exclude_patterns"] == ["*sample*", "*.nfo"]
+
+
 def test_delete_library_cascades_dependents(client):
     """删除媒体库时需按外键依赖顺序清理字幕/候选/决策日志，否则报 FOREIGN KEY 错误。"""
     from sqlalchemy import create_engine, select, text

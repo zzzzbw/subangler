@@ -16,7 +16,7 @@ from sqlalchemy import create_engine, event, select, update
 from sqlalchemy.orm import sessionmaker
 
 from ..config import ConfigStore
-from ..core.models import Base, CandidateRow, DecisionLog, Job, MediaLibrary, Subtitle, Video
+from ..core.models import Base, CandidateRow, DecisionLog, Job, MediaLibrary, Subtitle, Video, ensure_schema
 from ..core.orchestrator import DownloadOutcome, DownloadOrchestrator, OrchestratorConfig
 from ..core.quota import QuotaManager
 from ..core.subliminal_adapter import SubliminalKernel
@@ -39,6 +39,7 @@ def make_engine(db_path: str):
         cur.close()
 
     Base.metadata.create_all(engine)
+    ensure_schema(engine)
     return engine
 
 
@@ -161,8 +162,15 @@ def run_scan_library(ctx: TaskContext, library_id: int, job_id: int | None = Non
         if not lib:
             raise ValueError(f"媒体库不存在: {library_id}")
         root = lib.root_path
+        scan_depth = lib.scan_depth
+        try:
+            exclude_patterns = json.loads(lib.exclude_patterns or "[]")
+            if not isinstance(exclude_patterns, list):
+                exclude_patterns = []
+        except (ValueError, TypeError):
+            exclude_patterns = []
     orch = ctx.orchestrator(progress, job_id=job_id)
-    videos = orch.scan_library(root)
+    videos = orch.scan_library(root, scan_depth=scan_depth, exclude_patterns=exclude_patterns)
 
     added = 0
     updated = 0
