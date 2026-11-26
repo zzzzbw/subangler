@@ -238,6 +238,49 @@ def test_providers_dashboard(api_env):
     assert assrt["enabled"] is True
 
 
+def test_providers_expose_credential_fields(api_env):
+    """看板为每个源暴露凭证字段（含掩码与配置状态），供字幕源页直接管理。"""
+    client, db, video_id, cand_id = api_env
+    from subangler.config import get_config_store
+
+    store = get_config_store()
+    store.set("credentials.assrt_token", "secret-token-xyz", operator="test")
+
+    r = client.get("/api/providers")
+    assert r.status_code == 200
+    by_name = {i["name"]: i for i in r.json()["items"]}
+
+    assrt = by_name["assrt"]
+    assert assrt["credential_configured"] is True
+    assert len(assrt["credential_fields"]) == 1
+    token = assrt["credential_fields"][0]
+    assert token["key"] == "credentials.assrt_token"
+    assert token["test_provider"] == "assrt"
+    assert token["configured"] is True
+    assert "secret-token-xyz" not in token["masked"]  # 只返回掩码
+    assert "****" in token["masked"]
+
+    # 原生 opensubtitlescom 也暴露 API Key 字段（此前 credential_configured 恒为 None）
+    osc = by_name["opensubtitlescom"]
+    keys = {f["key"]: f for f in osc["credential_fields"]}
+    assert "credentials.opensubtitles_api_key" in keys
+    assert keys["credentials.opensubtitles_api_key"]["test_provider"] == "opensubtitles_com"
+
+    # zimuku cookies 可选、不支持单独探测
+    zimuku = by_name["zimuku"]
+    assert zimuku["credential_fields"][0]["test_provider"] is None
+
+    # 未配置凭证的源：configured=False，掩码为空
+    subdl = by_name["subdl"]
+    assert subdl["credential_configured"] is False
+    assert subdl["credential_fields"][0]["configured"] is False
+    assert subdl["credential_fields"][0]["masked"] == ""
+
+    # 无需凭证的原生源字段为空
+    assert by_name["podnapisi"]["credential_fields"] == []
+    assert by_name["podnapisi"]["credential_configured"] is None
+
+
 def test_provider_toggle_and_health(api_env):
     client, db, video_id, cand_id = api_env
     r = client.patch("/api/providers/assrt", json={"enabled": False})

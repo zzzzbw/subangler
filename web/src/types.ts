@@ -111,6 +111,13 @@ export interface ProviderItem {
   cooldown_until: string | null
   rate_limit: unknown
   credential_configured: boolean | null
+  credential_fields: {
+    key: string
+    label: string
+    test_provider: string | null
+    masked: string
+    configured: boolean
+  }[]
 }
 
 export interface HealthCheck {

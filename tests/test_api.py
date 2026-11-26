@@ -122,6 +122,49 @@ def test_test_connection_assrt_uses_quota_endpoint(client, monkeypatch):
     assert "配额" in body["detail"]
 
 
+def test_test_connection_falls_back_to_saved_credential(client, monkeypatch):
+    """凭证掩码状态下前端不传明文，后端应回退用库中已保存凭证探测。"""
+    import subangler.api.routes.config as cfg_routes
+
+    class _Resp:
+        status_code = 200
+        text = '{"status":0,"user":{"result":"succeed","quota":20}}'
+
+        def json(self):
+            return {"status": 0, "user": {"result": "succeed", "quota": 20}}
+
+    captured = {}
+
+    def fake_get(url, headers=None, timeout=None):
+        captured["headers"] = headers
+        return _Resp()
+
+    monkeypatch.setattr(cfg_routes.httpx, "get", fake_get)
+    client.post("/api/auth/login", json={"username": "admin", "password": "test-password-123"})
+    client.patch("/api/config", json={"values": {"credentials.assrt_token": "saved-token-abc"}})
+
+    # 不传 token：模拟未点「显示」时前端只发 provider 的场景
+    resp = client.post("/api/config/test-connection", json={"provider": "assrt"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert captured["headers"]["Authorization"] == "Bearer saved-token-abc"
+
+    # SubDL 同样回退到已保存的 api_key
+    client.patch("/api/config", json={"values": {"credentials.subdl_api_key": "saved-key-xyz"}})
+    resp = client.post("/api/config/test-connection", json={"provider": "subdl"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert captured["headers"]["X-Api-Key"] == "saved-key-xyz"
+
+
+def test_test_connection_without_credential_returns_400(client, monkeypatch):
+    """既没传明文也没保存凭证时应明确报 400，而不是发出空凭证请求。"""
+    client.post("/api/auth/login", json={"username": "admin", "password": "test-password-123"})
+    resp = client.post("/api/config/test-connection", json={"provider": "assrt"})
+    assert resp.status_code == 400
+    assert "凭证为空" in resp.json()["detail"]
+
+
 def test_delete_library_cascades_dependents(client):
     """删除媒体库时需按外键依赖顺序清理字幕/候选/决策日志，否则报 FOREIGN KEY 错误。"""
     from sqlalchemy import create_engine, select, text

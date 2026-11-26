@@ -29,6 +29,28 @@ _NATIVE_NEEDS_CRED = {
     "opensubtitlescom_vip": "credentials.opensubtitles_api_key",
 }
 
+# provider -> 凭证字段列表：供字幕源页直接管理凭证（显示/编辑/保存）。
+# test_provider 为 /api/config/test-connection 支持的 provider 名；None 表示不支持单独探测。
+_CREDENTIAL_FIELDS: dict[str, list[dict[str, Any]]] = {
+    "opensubtitlescom": [
+        {"key": "credentials.opensubtitles_api_key", "label": "API Key", "test_provider": "opensubtitles_com"},
+        {"key": "credentials.opensubtitles_username", "label": "用户名", "test_provider": None},
+        {"key": "credentials.opensubtitles_password", "label": "密码", "test_provider": None},
+    ],
+    "assrt": [
+        {"key": "credentials.assrt_token", "label": "Token", "test_provider": "assrt"},
+    ],
+    "subdl": [
+        {"key": "credentials.subdl_api_key", "label": "API Key", "test_provider": "subdl"},
+    ],
+    "zimuku": [
+        {"key": "credentials.zimuku_cookies", "label": "Cookies（可选）", "test_provider": None},
+    ],
+}
+# 别名指向同一组凭证字段（原生源经 _canonical 规范化后落到 opensubtitlescom）。
+for _alias in ("opensubtitlescomvip", "opensubtitles_com", "opensubtitlescom_vip"):
+    _CREDENTIAL_FIELDS[_alias] = _CREDENTIAL_FIELDS["opensubtitlescom"]
+
 
 def _quota() -> QuotaManager:
     store = get_config_store()
@@ -68,6 +90,23 @@ def list_providers() -> dict:
         meta = custom_meta.get(name, {})
         is_custom = name in custom_meta
         h = health.get(name, {"state": "OK", "fail_count": 0, "cooldown_until": None})
+        cred_fields = [
+            {
+                "key": f["key"],
+                "label": f["label"],
+                "test_provider": f["test_provider"],
+                "masked": str(store.get(f["key"]) or ""),  # 敏感项仅返回掩码
+                "configured": bool(store.get_secret(f["key"])),
+            }
+            for f in _CREDENTIAL_FIELDS.get(name, [])
+        ]
+        cred_key = meta.get("credential_key")
+        if cred_fields:
+            credential_configured = any(f["configured"] for f in cred_fields)
+        elif cred_key:
+            credential_configured = bool(store.get_secret(cred_key))
+        else:
+            credential_configured = None
         items.append({
             "name": name,
             "display_name": meta.get("display_name", name),
@@ -79,7 +118,8 @@ def list_providers() -> dict:
             "fail_count": h.get("fail_count", 0),
             "cooldown_until": h.get("cooldown_until"),
             "rate_limit": rate_limits.get(name),
-            "credential_configured": bool(store.get_secret(meta["credential_key"])) if meta.get("credential_key") else None,
+            "credential_configured": credential_configured,
+            "credential_fields": cred_fields,
         })
     return {"items": items, "enabled": sorted(enabled)}
 

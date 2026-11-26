@@ -315,10 +315,11 @@ textarea.config-input { font-family: ui-monospace, "SF Mono", Menlo, Consolas, m
 
 /* ---------- Providers ---------- */
 .provider-list { display: flex; flex-direction: column; gap: 10px; }
-.provider-card { display: flex; align-items: center; gap: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); transition: .15s; }
+.provider-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); transition: .15s; }
 .provider-card:hover { border-color: var(--border-strong); }
 .provider-card.abnormal { border-left: 3px solid var(--error); }
 .provider-card.dragging { opacity: .4; }
+.provider-card-row { display: flex; align-items: center; gap: 14px; }
 .provider-grip { cursor: grab; color: var(--muted); font-size: 14px; letter-spacing: -3px; user-select: none; }
 .provider-index { width: 26px; height: 26px; border-radius: 7px; background: var(--surface-2); color: var(--text-2); display: grid; place-items: center; font-weight: 700; font-size: 12px; }
 .provider-main { flex: 1; min-width: 0; }
@@ -327,6 +328,12 @@ textarea.config-input { font-family: ui-monospace, "SF Mono", Menlo, Consolas, m
 .provider-meta { display: flex; gap: 16px; margin-top: 6px; font-size: 12px; color: var(--text-2); flex-wrap: wrap; }
 .provider-quota { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 .provider-actions { display: flex; align-items: center; gap: 8px; }
+.credential-panel { margin-top: 14px; padding: 14px; border-top: 1px solid var(--border); background: var(--surface-2); border-radius: var(--radius-sm); }
+.credential-hint { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+.credential-field { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.credential-field > label { width: 120px; flex-shrink: 0; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.credential-controls { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.credential-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding-left: 132px; }
 .toggle { width: 40px; height: 22px; border-radius: 999px; border: 0; background: #cbd5e1; padding: 3px; cursor: pointer; transition: .2s; }
 .toggle span { display: block; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: .2s; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
 .toggle.on { background: var(--ok); }

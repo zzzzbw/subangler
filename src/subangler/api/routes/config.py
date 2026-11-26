@@ -109,20 +109,34 @@ def test_flaresolverr(payload: TestFlareSolverrRequest) -> dict[str, Any]:
 
 @router.post("/test-connection")
 def test_connection(payload: TestConnectionRequest) -> dict[str, Any]:
-    """用传入凭证做一次最小请求，不写库。"""
+    """用传入凭证做一次最小请求，不写库。
+
+    未传凭证时回退读取已保存配置：前端凭证掩码状态下（未点「显示」）也能直接测试，
+    且避免把明文暴露到浏览器。
+    """
     store = get_config_store()
     assrt_base = str(store.get("providers.assrt_base_url") or "https://api.assrt.net").rstrip("/")
     subdl_base = str(store.get("providers.subdl_base_url") or "https://api.subdl.com").rstrip("/")
     api_key = (payload.api_key or "").strip()
     token = (payload.token or "").strip()
+    saved_keys = {
+        "opensubtitles_com": "credentials.opensubtitles_api_key",
+        "subdl": "credentials.subdl_api_key",
+        "assrt": "credentials.assrt_token",
+    }
+    if payload.provider not in saved_keys:
+        raise HTTPException(status_code=400, detail=f"不支持的 Provider: {payload.provider}")
+    # 掩码状态下前端不传明文 -> 用库中已保存凭证探测。
+    if payload.provider == "assrt" and not token:
+        token = str(store.get_secret(saved_keys[payload.provider]) or "").strip()
+    elif payload.provider != "assrt" and not api_key:
+        api_key = str(store.get_secret(saved_keys[payload.provider]) or "").strip()
     # ASSRT 官方文档只有 /v1/user/quota，没有 /v1/user/info；认证支持 Authorization: Bearer。
     endpoints = {
         "opensubtitles_com": ("https://api.opensubtitles.com/api/v1/languages", "Api-Key", api_key),
         "subdl": (f"{subdl_base}/api/v1/languages", "X-Api-Key", api_key),
         "assrt": (f"{assrt_base}/v1/user/quota", "Authorization", f"Bearer {token}" if token else ""),
     }
-    if payload.provider not in endpoints:
-        raise HTTPException(status_code=400, detail=f"不支持的 Provider: {payload.provider}")
     url, header_name, credential = endpoints[payload.provider]
     if not credential:
         raise HTTPException(status_code=400, detail="凭证为空")
