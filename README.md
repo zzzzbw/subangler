@@ -114,14 +114,19 @@ npm run build                     # 类型检查 + 构建 → ../src/subangler/s
 
 ## Docker 部署（NAS）
 
+推荐用现成镜像部署，NAS 上无需源码和本地构建：
+
 ```bash
-# 按 NAS 环境修改 .env（管理员密码等）
-cp .env.example .env
-# 媒体库路径通过 MEDIA_ROOT 挂载，字幕需回写同目录，必须可写
-MEDIA_ROOT=/volume1/tvshows docker compose up -d --build
+# 1. 复制 docker-compose.nas.yml，把其中 <你的DockerHub用户名> 换成实际用户名
+# 2. 同目录创建 .env：ADMIN_PASSWORD / MEDIA_ROOT / PUID / PGID
+docker compose -f docker-compose.nas.yml up -d
 ```
 
-镜像内置 ffmpeg / libmediainfo；以 PUID/PGID 对齐 NAS 属主。首次启动后到 `http://<nas-ip>:8765` 登录，在设置页配置凭证、在媒体库页添加目录并设置逐库扫描规则。Zimuku 的 JS 挑战可选启用 `docker-compose.yml` 中注释的 FlareSolverr sidecar。公网暴露务必配反代 + HTTPS。
+访问 `http://<nas-ip>:8765` 登录，在媒体库页添加目录（容器内 `/media/tvshows`）并设置逐库扫描规则，在字幕源页填写凭证。
+
+镜像由 GitHub Actions 自动构建（amd64 + arm64），推送到 Docker Hub 的 `<用户名>/subangler`，带 `latest` 和版本号两个标签。想自己构建或更新镜像、配置 Docker Hub 凭证、以及ARM/权限等常见问题，见 **`docs/NAS部署指南.md`**。
+
+本地开发想用源码构建时，仍可用根目录的 `docker-compose.yml`（`build: .`）。镜像内置 ffmpeg / libmediainfo；媒体库目录必须可写并以 PUID/PGID 对齐属主；公网暴露务必配反代 + HTTPS。
 
 ## 测试与验证
 
@@ -144,6 +149,7 @@ python scripts/verify_m3.py         # M3 验收（SPA 路由/静态资源/API �
 - `docs/字幕工具详细设计方案.md`：架构与实施路线（v0.3）
 - `docs/快速启动与验证清单.md`：启动步骤 + 手动功能验证清单
 - `docs/自定义字幕源优化记录.md`：按源记录 ASSRT / SubDL / Zimuku 的针对性优化（ASSRT 单文件评分、season 脏数据容错、测试接口修复等）
+- `docs/NAS部署指南.md`：Docker Hub 凭证配置、Actions 构建触发、NAS 拉取部署与常见问题
 
 ## 许可与合规
 

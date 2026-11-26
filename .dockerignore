@@ -1,0 +1,44 @@
+# Git 与工作记忆
+.git
+.github
+.workbuddy
+
+# Python 虚拟环境与缓存
+.venv
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_tmp/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# 运行时数据（密钥/数据库/日志，绝不进镜像）
+config/
+.env
+.env.*
+secret.key
+*.db
+*.db-wal
+*.db-shm
+*.dbm
+*.log
+
+# Node 依赖与前端中间产物（镜像内会重新安装/构建）
+web/node_modules/
+node_modules/
+web/tsconfig.tsbuildinfo
+
+# 文档、测试、验收脚本与临时产物（运行镜像不需要）
+docs/
+tests/
+scripts/
+.ui-verify/
+*.png
+*.md
+
+# 本地会话/系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
