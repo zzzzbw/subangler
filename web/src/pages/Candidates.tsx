@@ -1,34 +1,88 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import type { Candidate, Video } from '../types'
 import { Badge, Card, Empty, ErrorBox, Spinner, langLabel, useToasts } from '../components/ui'
 
 type ToastPush = ReturnType<typeof useToasts>['push']
 
+const PAGE_SIZES = [10, 20, 50, 100]
+
 export default function Candidates({ push }: { push: ToastPush }) {
+  const [params, setParams] = useSearchParams()
+  const videoFilter = params.get('video') || ''
+  const langFilter = params.get('lang') || ''
+  const qParam = params.get('q') || ''
+  const page = Math.max(1, Number(params.get('page')) || 1)
+  const pageSize = PAGE_SIZES.includes(Number(params.get('size'))) ? Number(params.get('size')) : 20
+
   const [candidates, setCandidates] = useState<Candidate[] | null>(null)
   const [videos, setVideos] = useState<Video[]>([])
+  const [total, setTotal] = useState(0)
+  const [groups, setGroups] = useState(0)
+  const [pages, setPages] = useState(0)
   const [error, setError] = useState('')
-  const [videoFilter, setVideoFilter] = useState('')
-  const [langFilter, setLangFilter] = useState('')
   const [busyId, setBusyId] = useState<number | null>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
   const [uploadVideo, setUploadVideo] = useState<number | null>(null)
   const [uploadLang, setUploadLang] = useState('zh')
 
+  // 搜索框本地值 + 防抖写回 URL。
+  const [searchInput, setSearchInput] = useState(qParam)
+  const paramsRef = useRef(params)
+  paramsRef.current = params
+  const qParamRef = useRef(qParam)
+  qParamRef.current = qParam
+  useEffect(() => { setSearchInput(qParam) }, [qParam])
+  useEffect(() => {
+    if (searchInput === qParamRef.current) return
+    const timer = setTimeout(() => {
+      const p = new URLSearchParams(paramsRef.current)
+      const value = searchInput.trim()
+      if (value) p.set('q', value); else p.delete('q')
+      p.delete('page')
+      setParams(p)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchInput, setParams])
+  // 分组数变化后页码越界则回到最后一页。
+  useEffect(() => {
+    if (pages > 0 && page > pages) {
+      const p = new URLSearchParams(params)
+      p.set('page', String(pages))
+      setParams(p)
+    }
+  }, [pages, page, params, setParams])
+
   const load = useCallback(async () => {
     try {
-      const q = new URLSearchParams({ status: 'pending', limit: '300' })
-      if (videoFilter) q.set('video_id', videoFilter)
-      if (langFilter) q.set('language', langFilter)
+      const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+      if (videoFilter) query.set('video_id', videoFilter)
+      if (langFilter) query.set('language', langFilter)
+      if (qParam) query.set('q', qParam)
       const [cRes, vRes] = await Promise.all([
-        api.get<{ items: Candidate[] }>(`/api/candidates?${q}`),
+        api.get<{ items: Candidate[]; total: number; groups: number; pages: number }>(`/api/candidates?${query}`),
         api.get<{ items: Video[] }>('/api/videos?limit=1000'),
       ])
-      setCandidates(cRes.items); setVideos(vRes.items); setError('')
+      setCandidates(cRes.items)
+      setTotal(cRes.total); setGroups(cRes.groups); setPages(cRes.pages)
+      setVideos(vRes.items); setError('')
     } catch (e) { setError((e as Error).message) }
-  }, [videoFilter, langFilter])
+  }, [videoFilter, langFilter, qParam, page, pageSize])
   useEffect(() => { load() }, [load])
+
+  function updateParam(key: string, value: string) {
+    const p = new URLSearchParams(params)
+    if (value) p.set(key, value); else p.delete(key)
+    p.delete('page')
+    setParams(p)
+  }
+
+  function goPage(next: number) {
+    const p = new URLSearchParams(params)
+    p.set('page', String(Math.max(1, Math.min(next, pages || 1))))
+    setParams(p)
+  }
 
   async function install(c: Candidate) {
     setBusyId(c.id)
@@ -57,14 +111,14 @@ export default function Candidates({ push }: { push: ToastPush }) {
   }
 
   // 按视频+语言分组，并排展示候选。
-  const groups: { key: string; videoId: number; lang: string; items: Candidate[] }[] = []
+  const groupList: { key: string; videoId: number; lang: string; items: Candidate[] }[] = []
   for (const c of candidates || []) {
     const key = `${c.video_id}:${c.language}`
-    let g = groups.find((x) => x.key === key)
-    if (!g) { g = { key, videoId: c.video_id, lang: c.language, items: [] }; groups.push(g) }
+    let g = groupList.find((x) => x.key === key)
+    if (!g) { g = { key, videoId: c.video_id, lang: c.language, items: [] }; groupList.push(g) }
     g.items.push(c)
   }
-  for (const g of groups) g.items.sort((a, b) => b.score - a.score)
+  for (const g of groupList) g.items.sort((a, b) => b.score - a.score)
 
   const videoMap = new Map(videos.map((v) => [v.id, v]))
 
@@ -75,7 +129,7 @@ export default function Candidates({ push }: { push: ToastPush }) {
       <div className="page-head">
         <div>
           <h1>候选挑选</h1>
-          <p className="page-sub">自动评分未达标时，在这里对比候选并人工救回</p>
+          <p className="page-sub">{groups} 组待选 · {total} 个候选，对比后人工救回</p>
         </div>
         <div className="head-actions">
           <select className="select" value={uploadVideo || ''} onChange={(e) => setUploadVideo(Number(e.target.value) || null)}>
@@ -96,18 +150,22 @@ export default function Candidates({ push }: { push: ToastPush }) {
 
       <Card>
         <div className="filter-bar">
-          <select className="select" value={videoFilter} onChange={(e) => setVideoFilter(e.target.value)}>
+          <select className="select" value={videoFilter} onChange={(e) => updateParam('video', e.target.value)}>
             <option value="">全部剧集</option>
             {videos.map((v) => <option key={v.id} value={v.id}>{v.title || v.path.split(/[\\/]/).pop()} {v.episode ? `E${v.episode}` : ''}</option>)}
           </select>
-          <select className="select" value={langFilter} onChange={(e) => setLangFilter(e.target.value)}>
+          <select className="select" value={langFilter} onChange={(e) => updateParam('lang', e.target.value)}>
             <option value="">全部语言</option><option value="zh">简体中文</option><option value="en">英文</option>
           </select>
+          <input className="search-input" type="search" placeholder="搜索剧名、发布名或来源…" value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)} />
         </div>
 
-        {groups.length === 0 ? <Empty text="没有待挑选的候选" hint="下载任务中评分不达标的候选会自动出现在这里" /> : (
+        {error && <ErrorBox message={error} onRetry={load} />}
+
+        {groupList.length === 0 ? <Empty text="没有符合条件的候选" hint="试试调整搜索词或筛选条件" /> : (
           <div className="candidate-groups">
-            {groups.map((g) => {
+            {groupList.map((g) => {
               const v = videoMap.get(g.videoId)
               return (
                 <div key={g.key} className="candidate-group">
@@ -154,6 +212,17 @@ export default function Candidates({ push }: { push: ToastPush }) {
             })}
           </div>
         )}
+
+        <div className="pager">
+          <span className="pager-info">第 {page} / {Math.max(pages, 1)} 页 · 共 {groups} 组 / {total} 个候选</span>
+          <div className="pager-controls">
+            <button className="btn btn-sm" disabled={page <= 1} onClick={() => goPage(page - 1)}>上一页</button>
+            <button className="btn btn-sm" disabled={page >= Math.max(pages, 1)} onClick={() => goPage(page + 1)}>下一页</button>
+            <select className="select" value={pageSize} onChange={(e) => updateParam('size', e.target.value)}>
+              {PAGE_SIZES.map((n) => <option key={n} value={n}>{n} 组/页</option>)}
+            </select>
+          </div>
+        </div>
       </Card>
     </div>
   )

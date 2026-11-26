@@ -7,9 +7,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select, update
+from sqlalchemy import func, or_, select, update
 
 from ...auth import require_user
 from ...config import get_config_store
@@ -50,19 +50,75 @@ def list_candidates(
     video_id: int | None = None,
     language: str | None = None,
     status: str = "pending",
-    limit: int = 200,
+    q: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    limit: int | None = Query(default=None, ge=1, le=1000),
 ) -> dict:
+    """候选列表：支持模糊搜索与按「视频+语言」分组分页。
+
+    - q：对剧名、路径、发布名、external_id、来源做大小写不敏感匹配。
+    - 分页按 (video_id, language) 分组，保证同一视频的候选不会被拆到两页。
+    - total 为符合筛选的候选条数，groups 为分组数，pages 按分组数计算。
+    - limit 为旧参数，传入时按每页分组数使用。
+    """
     ctx = _ctx()
+    keyword = (q or "").strip()
+    size = limit or page_size
+    conditions = []
+    if video_id:
+        conditions.append(CandidateRow.video_id == video_id)
+    if language:
+        conditions.append(CandidateRow.language == language)
+    if status != "all":
+        conditions.append(CandidateRow.status == status)
+    if keyword:
+        pattern = f"%{keyword}%"
+        conditions.append(or_(
+            CandidateRow.release_name.ilike(pattern),
+            CandidateRow.external_id.ilike(pattern),
+            CandidateRow.provider.ilike(pattern),
+            Video.title.ilike(pattern),
+            Video.path.ilike(pattern),
+        ))
+
     with ctx.SessionLocal() as session:
-        stmt = select(CandidateRow)
-        if video_id:
-            stmt = stmt.where(CandidateRow.video_id == video_id)
-        if language:
-            stmt = stmt.where(CandidateRow.language == language)
-        if status != "all":
-            stmt = stmt.where(CandidateRow.status == status)
-        rows = session.execute(stmt.order_by(CandidateRow.score.desc(), CandidateRow.id).limit(limit)).scalars().all()
-    return {"items": [_candidate_view(r) for r in rows], "total": len(rows)}
+        base = select(CandidateRow).join(Video, CandidateRow.video_id == Video.id)
+        count_stmt = select(func.count()).select_from(CandidateRow).join(Video, CandidateRow.video_id == Video.id)
+        group_stmt = select(CandidateRow.video_id, CandidateRow.language).join(
+            Video, CandidateRow.video_id == Video.id)
+        for cond in conditions:
+            base = base.where(cond)
+            count_stmt = count_stmt.where(cond)
+            group_stmt = group_stmt.where(cond)
+
+        total = session.execute(count_stmt).scalar_one()
+        groups_all = session.execute(
+            group_stmt.group_by(CandidateRow.video_id, CandidateRow.language)
+            .order_by(CandidateRow.video_id, CandidateRow.language)
+        ).all()
+        group_count = len(groups_all)
+        pages = (group_count + size - 1) // size
+        current = groups_all[(page - 1) * size: page * size]
+        if current:
+            group_filter = or_(*[
+                (CandidateRow.video_id == vid) & (CandidateRow.language == lang)
+                for vid, lang in current
+            ])
+            rows = session.execute(
+                base.where(group_filter).order_by(CandidateRow.score.desc(), CandidateRow.id)
+            ).scalars().all()
+        else:
+            rows = []
+
+    return {
+        "items": [_candidate_view(r) for r in rows],
+        "total": total,
+        "groups": group_count,
+        "page": page,
+        "page_size": size,
+        "pages": pages,
+    }
 
 
 class InstallRequest(BaseModel):
