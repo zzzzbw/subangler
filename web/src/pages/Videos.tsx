@@ -6,7 +6,7 @@ import { Badge, Card, Empty, ErrorBox, Spinner, langLabel, useToasts } from '../
 
 type ToastPush = ReturnType<typeof useToasts>['push']
 
-type StatusFilter = 'all' | 'missing' | 'has_subtitle' | 'needs_attention'
+type StatusFilter = 'all' | 'missing_zh' | 'has_subtitle' | 'embedded' | 'external' | 'needs_attention'
 const PAGE_SIZES = [20, 50, 100, 200]
 
 export default function Videos({ push }: { push: ToastPush }) {
@@ -120,7 +120,7 @@ export default function Videos({ push }: { push: ToastPush }) {
       <Card>
         <div className="filter-bar">
           <div className="segmented">
-            {([['all', '全部'], ['missing', '仅缺字幕'], ['has_subtitle', '已有字幕'], ['needs_attention', '需关注']] as [StatusFilter, string][]).map(([key, label]) => (
+            {([['all', '全部'], ['missing_zh', '缺失中文'], ['has_subtitle', '已有字幕'], ['embedded', '内嵌已有'], ['external', '外挂已有'], ['needs_attention', '字幕异常']] as [StatusFilter, string][]).map(([key, label]) => (
               <button key={key} className={status === key ? 'active' : ''}
                 onClick={() => updateParam('status', key === 'all' ? '' : key)}>{label}</button>
             ))}
@@ -205,7 +205,14 @@ function VideoRow({ video, langs, selected, focused, onToggle, push, onChanged }
   }
 
   const missingLangs = langs.filter((l) => !video.subtitles.some((s) => s.language === l || s.language.startsWith(l)))
-  const statusTone = video.status === 'has_subtitle' ? 'ok' : isMissing(video) ? 'warn' : 'muted'
+  // 内嵌轨（MediaInfo 探测）与外挂字幕文件是两回事：外挂优先展示，内嵌单独标注。
+  const embeddedLangs = (video.embedded_langs || '').split(',').map((s) => s.trim()).filter(Boolean)
+  const hasEmbedded = (l: string) => embeddedLangs.some((e) => e === l || e.startsWith(l))
+  const extraEmbedded = embeddedLangs.filter((e) => !langs.some((l) => e === l || e.startsWith(l)))
+  const statusTone = video.status === 'has_subtitle' ? 'ok'
+    : video.status === 'embedded_subtitle' ? 'ok'
+      : video.status === 'needs_attention' || video.status === 'failed' ? 'error'
+        : isMissing(video) ? 'warn' : 'muted'
 
   return (
     <div id={`video-${video.id}`} className={`video-row ${focused ? 'focused' : ''}`}>
@@ -218,10 +225,18 @@ function VideoRow({ video, langs, selected, focused, onToggle, push, onChanged }
       <span className="col-langs">
         {langs.map((l) => {
           const sub = video.subtitles.find((s) => s.language === l || s.language.startsWith(l))
-          return sub ? (
-            <Badge key={l} tone={sub.is_manual ? 'accent' : 'ok'}>{langLabel(l)}{sub.is_manual ? '·人工' : ''}</Badge>
-          ) : <Badge key={l} tone="empty">{langLabel(l)}·缺</Badge>
+          if (sub) return <Badge key={l} tone={sub.is_manual ? 'accent' : 'ok'}
+            title={sub.is_manual ? '人工安装的外挂字幕文件' : '自动下载的外挂字幕文件'}>
+            {langLabel(l)}·外挂{sub.is_manual ? '·人工' : ''}
+          </Badge>
+          if (hasEmbedded(l)) return <Badge key={l} tone="muted" title="视频内嵌字幕轨，非外挂字幕文件">{langLabel(l)}·内嵌</Badge>
+          return <Badge key={l} tone="empty">{langLabel(l)}·缺</Badge>
         })}
+        {extraEmbedded.length > 0 && (
+          <Badge tone="muted" title={extraEmbedded.map(langLabel).join('、')}>
+            内嵌其他 +{extraEmbedded.length}
+          </Badge>
+        )}
       </span>
       <span className="col-actions">
         {(missingLangs.length > 0 || isMissing(video)) && (
@@ -237,8 +252,9 @@ function isMissing(v: Video): boolean {
 }
 function statusLabel(s: string): string {
   const map: Record<string, string> = {
-    has_subtitle: '已有字幕', missing: '缺字幕', pending: '待处理', needs_attention: '需人工',
-    failed: '失败', skipped: '已跳过', scanned: '已扫描',
+    has_subtitle: '外挂已有', embedded_subtitle: '内嵌已有',
+    missing: '缺字幕', pending: '待处理', needs_attention: '字幕异常',
+    failed: '字幕异常', skipped: '已跳过', scanned: '已扫描',
   }
   return map[s] || s
 }

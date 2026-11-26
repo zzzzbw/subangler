@@ -93,7 +93,9 @@ if STATIC_DIR.exists():
     def spa_fallback(full_path: str):
         index = STATIC_DIR / "index.html"
         if index.exists():
-            return FileResponse(index)
+            # 入口页引用带 hash 的资源名，必须每次取最新版，否则浏览器会拿旧 HTML
+            # 继续请求已被构建覆盖的旧 JS，导致改版后页面仍是旧界面。
+            return FileResponse(index, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
         return JSONResponse(status_code=404, content={"detail": "not found"})
 else:
 

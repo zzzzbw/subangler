@@ -163,3 +163,15 @@ def ensure_schema(engine) -> None:
             conn.execute(text(
                 "ALTER TABLE media_library ADD COLUMN exclude_patterns TEXT NOT NULL DEFAULT '[]'"
             ))
+
+    # 历史数据：旧版把「内嵌字幕轨」也标成 has_subtitle，与外挂字幕语义混用。
+    # 将「仅内嵌、无外挂字幕文件记录」的视频改为 embedded_subtitle；幂等，可每次启动执行。
+    tables = set(inspector.get_table_names())
+    if "video" in tables and "subtitle" in tables:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "UPDATE video SET status = 'embedded_subtitle' "
+                "WHERE status = 'has_subtitle' "
+                "AND embedded_langs IS NOT NULL AND embedded_langs != '' "
+                "AND id NOT IN (SELECT DISTINCT video_id FROM subtitle)"
+            ))

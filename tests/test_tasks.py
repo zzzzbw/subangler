@@ -117,6 +117,59 @@ def test_download_batch_updates_video_status(ctx):
         assert session.get(Job, job_id).error_message is None
 
 
+def test_download_all_failed_marks_video_needs_attention(ctx):
+    """全部语言下载失败/无候选 → 视频标记 needs_attention（字幕异常），供筛选。"""
+    from subangler.core.orchestrator import DownloadOutcome
+
+    with ctx.SessionLocal() as session:
+        lib = MediaLibrary(root_path="/media")
+        session.add(lib)
+        session.flush()
+        video = Video(library_id=lib.id, path="/media/Fail.Show.mkv", status="scanned")
+        session.add(video)
+        session.commit()
+        vid = video.id
+
+    with patch.object(ctx, "orchestrator") as factory:
+        orch = MagicMock()
+        orch.download_video.return_value = [
+            DownloadOutcome(video_path="/media/Fail.Show.mkv", language="zh", status="no_candidate"),
+            DownloadOutcome(video_path="/media/Fail.Show.mkv", language="en", status="failed", reason="boom"),
+        ]
+        factory.return_value = orch
+        run_download_batch(ctx, [vid])
+
+    with ctx.SessionLocal() as session:
+        assert session.get(Video, vid).status == "needs_attention"
+
+
+def test_download_partial_success_marks_video_has_subtitle(ctx):
+    """多语言中任一成功 → 标记 has_subtitle，不误判为字幕异常。"""
+    from subangler.core.orchestrator import DownloadOutcome
+
+    with ctx.SessionLocal() as session:
+        lib = MediaLibrary(root_path="/media")
+        session.add(lib)
+        session.flush()
+        video = Video(library_id=lib.id, path="/media/Partial.Show.mkv", status="scanned")
+        session.add(video)
+        session.commit()
+        vid = video.id
+
+    with patch.object(ctx, "orchestrator") as factory:
+        orch = MagicMock()
+        orch.download_video.return_value = [
+            DownloadOutcome(video_path="/media/Partial.Show.mkv", language="zh", status="no_candidate"),
+            DownloadOutcome(video_path="/media/Partial.Show.mkv", language="en", status="downloaded",
+                            provider="fake", score=90, subtitle_path="/media/Partial.Show.en.srt"),
+        ]
+        factory.return_value = orch
+        run_download_batch(ctx, [vid])
+
+    with ctx.SessionLocal() as session:
+        assert session.get(Video, vid).status == "has_subtitle"
+
+
 def test_api_libraries_and_videos(ctx, tmp_path, monkeypatch):
     monkeypatch.setenv("SUBANGLER_DB_PATH", str(tmp_path / "app.db"))
     reset_config_store()

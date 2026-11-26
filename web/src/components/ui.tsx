@@ -1,8 +1,8 @@
 // 通用 UI 小组件：徽标、状态点、卡片、加载/空态、Toast。
 import { useEffect, useState, type ReactNode } from 'react'
 
-export function Badge({ children, tone = 'default' }: { children: ReactNode; tone?: string }) {
-  return <span className={`badge badge-${tone}`}>{children}</span>
+export function Badge({ children, tone = 'default', title }: { children: ReactNode; tone?: string; title?: string }) {
+  return <span className={`badge badge-${tone}`} title={title}>{children}</span>
 }
 
 export function Dot({ tone = 'ok', pulse = false }: { tone?: string; pulse?: boolean }) {

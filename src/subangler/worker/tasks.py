@@ -172,12 +172,26 @@ def run_scan_library(ctx: TaskContext, library_id: int, job_id: int | None = Non
     orch = ctx.orchestrator(progress, job_id=job_id)
     videos = orch.scan_library(root, scan_depth=scan_depth, exclude_patterns=exclude_patterns)
 
+    # 已有外挂字幕记录的视频，重扫时不能被改回 scanned；外挂字幕优先于内嵌轨判定。
+    skip_existing = bool(ctx.config_store.get("output.skip_existing"))
     added = 0
     updated = 0
     with ctx.SessionLocal() as session:
+        external_ids = set(session.execute(
+            select(Subtitle.video_id).where(
+                Subtitle.video_id.in_(select(Video.id).where(Video.library_id == library_id))
+            )
+        ).scalars().all())
         for info in videos:
             path = info.get("path") or str(Path(root) / info["name"])
             existing = session.execute(select(Video).where(Video.library_id == library_id, Video.path == path)).scalar_one_or_none()
+            has_external = bool(existing and existing.id in external_ids)
+            has_embedded = bool(info.get("subtitle_languages"))
+            status = (
+                "has_subtitle" if has_external
+                else "embedded_subtitle" if (skip_existing and has_embedded)
+                else "scanned"
+            )
             vals = {
                 "title": info.get("title"),
                 "year": info.get("year"),
@@ -186,7 +200,7 @@ def run_scan_library(ctx: TaskContext, library_id: int, job_id: int | None = Non
                 "video_hash": (info.get("hashes") or {}).get("opensubtitles"),
                 "fps": str(info.get("frame_rate") or "") or None,
                 "embedded_langs": ",".join(info.get("subtitle_languages") or []) or None,
-                "status": "has_subtitle" if (ctx.config_store.get("output.skip_existing") and info.get("subtitle_languages")) else "scanned",
+                "status": status,
             }
             if existing:
                 for k, v in vals.items():
@@ -218,8 +232,17 @@ def run_download_batch(ctx: TaskContext, video_ids: list[int], languages: list[s
         if progress:
             progress(int(idx / max(total, 1) * 100), f" downloading {video.path}")
         batch = orch.download_video(video.path)
+        # 按视频聚合本次下载结果，决定最终视频状态：
+        # 任一语言成功 → has_subtitle；全部语言失败/无候选/低分 → needs_attention（字幕异常）。
+        # skipped_existing 不算异常（本就有字幕）。
+        got_subtitle = False
+        has_error = False
         for outcome in batch:
             outcomes.append(outcome)
+            if outcome.status == "downloaded" and outcome.subtitle_path:
+                got_subtitle = True
+            elif outcome.status in ("failed", "throttled", "no_candidate", "below_threshold"):
+                has_error = True
             _job_log(ctx, job_id, "download_result", _outcome_reason(outcome), {
                 "video_path": outcome.video_path,
                 "language": outcome.language,
@@ -267,10 +290,16 @@ def run_download_batch(ctx: TaskContext, video_ids: list[int], languages: list[s
                             provider=outcome.provider,
                             score=outcome.score,
                         ))
-                    session.execute(
-                        update(Video).where(Video.id == video.id).values(status="has_subtitle")
-                    )
                     session.commit()
+
+        # 字幕异常回写：全部语言都没拿到且存在失败/限流/无候选/低分，标记需人工关注。
+        # 任一语言下载成功则标记已有字幕（覆盖旧的异常状态）。
+        with ctx.SessionLocal() as session:
+            if got_subtitle:
+                session.execute(update(Video).where(Video.id == video.id).values(status="has_subtitle"))
+            elif has_error:
+                session.execute(update(Video).where(Video.id == video.id).values(status="needs_attention"))
+            session.commit()
 
     downloaded = sum(o.status == "downloaded" for o in outcomes)
     failed = sum(o.status in ("failed", "throttled") for o in outcomes)

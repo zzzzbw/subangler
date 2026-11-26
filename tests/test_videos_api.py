@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from subangler.auth import AuthManager, init_auth_from_config, set_auth_manager
 from subangler.config import ConfigStore, reset_config_store
-from subangler.core.models import MediaLibrary, Video
+from subangler.core.models import MediaLibrary, Subtitle, Video
 from subangler.main import app
 from subangler.worker.tasks import TaskContext
 
@@ -35,8 +35,15 @@ def client_and_ctx(tmp_path, monkeypatch):
             Video(library_id=lib.id, path="/media/ShowB/S02E01.mkv", title="Breaking Bad", status="needs_attention"),
             Video(library_id=lib.id, path="/media/ShowB/S02E02.mkv", title="Breaking Bad", status="failed"),
             Video(library_id=lib.id, path="/media/Movie.2024.mp4", title="The Matrix", status="scanned"),
+            # 中文样本：一条内嵌中文、一条外挂中文，用于「缺失中文」筛选
+            Video(library_id=lib.id, path="/media/EmbeddedZH.mkv", title="EmbeddedZH",
+                  status="embedded_subtitle", embedded_langs="en,zh"),
+            Video(library_id=lib.id, path="/media/ExternalZH.mkv", title="ExternalZH",
+                  status="has_subtitle", embedded_langs="en"),
         ]
         session.add_all(videos)
+        session.flush()
+        session.add(Subtitle(video_id=videos[-1].id, language="zh-CN", path="/media/ExternalZH.zh.srt"))
         session.commit()
 
     with TestClient(app) as client:
@@ -51,15 +58,15 @@ def test_pagination_returns_real_total(client_and_ctx):
     r = client.get("/api/videos?page=1&page_size=2")
     assert r.status_code == 200
     data = r.json()
-    assert data["total"] == 5
-    assert data["pages"] == 3
+    assert data["total"] == 7
+    assert data["pages"] == 4
     assert data["page"] == 1 and data["page_size"] == 2
     assert len(data["items"]) == 2
     assert [v["id"] for v in data["items"]] == [1, 2]
 
-    r2 = client.get("/api/videos?page=3&page_size=2").json()
+    r2 = client.get("/api/videos?page=4&page_size=2").json()
     assert len(r2["items"]) == 1
-    assert r2["items"][0]["id"] == 5
+    assert r2["items"][0]["id"] == 7
 
 
 def test_fuzzy_search_on_title_and_path(client_and_ctx):
@@ -81,7 +88,8 @@ def test_status_groups_and_combined_filters(client_and_ctx):
     # 复合状态：仅缺字幕 = missing/pending/needs_attention/failed
     assert client.get("/api/videos?status=missing").json()["total"] == 3
     assert client.get("/api/videos?status=needs_attention").json()["total"] == 2
-    assert client.get("/api/videos?status=has_subtitle").json()["total"] == 1
+    # 已有字幕组 = has_subtitle(2) + embedded_subtitle(1)
+    assert client.get("/api/videos?status=has_subtitle").json()["total"] == 3
     # 具体状态仍可精确筛选
     assert client.get("/api/videos?status=failed").json()["total"] == 1
     # 状态 + 搜索 + 分页组合
@@ -91,10 +99,20 @@ def test_status_groups_and_combined_filters(client_and_ctx):
     assert len(r["items"]) == 1
 
 
+def test_missing_chinese_filter(client_and_ctx):
+    client = client_and_ctx
+    # 内嵌中文（embedded_langs=en,zh）与外挂中文（zh-CN）都应被排除
+    r = client.get("/api/videos?status=missing_zh").json()
+    assert r["total"] == 5
+    paths = [v["path"] for v in r["items"]]
+    assert "/media/EmbeddedZH.mkv" not in paths
+    assert "/media/ExternalZH.mkv" not in paths
+
+
 def test_legacy_limit_param(client_and_ctx):
     client = client_and_ctx
     r = client.get("/api/videos?limit=2").json()
-    assert r["total"] == 5
+    assert r["total"] == 7
     assert r["page_size"] == 2
     assert len(r["items"]) == 2
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 
 from ...auth import require_user
 from ...config import get_config_store
@@ -16,6 +16,10 @@ router = APIRouter(prefix="/api/videos", tags=["videos"], dependencies=[Depends(
 _STATUS_GROUPS: dict[str, tuple[str, ...]] = {
     "missing": ("missing", "pending", "needs_attention", "failed"),
     "needs_attention": ("needs_attention", "failed"),
+    # 「已有字幕」= 内嵌轨已有 或 外挂文件已有；另提供两个细分筛选。
+    "has_subtitle": ("has_subtitle", "embedded_subtitle"),
+    "embedded": ("embedded_subtitle",),
+    "external": ("has_subtitle",),
 }
 
 
@@ -24,9 +28,31 @@ def _ctx() -> TaskContext:
     return TaskContext(db_path=str(store.db_path), config_store=store)
 
 
+def _has_chinese_subtitle():
+    """外挂中文字幕文件（zh 前缀，含 zh-CN/zh_Hant，以及 zho/yue）。"""
+    return exists(
+        select(Subtitle.id).where(
+            Subtitle.video_id == Video.id,
+            or_(Subtitle.language.like("zh%"), Subtitle.language.in_(("zho", "yue"))),
+        )
+    )
+
+
+def _has_chinese_embedded():
+    """内嵌中文字幕轨：embedded_langs 是以逗号分隔的语言代码，token 以 zh/zho/yue 开头。"""
+    langs = func.coalesce(Video.embedded_langs, "")
+    return or_(*(
+        or_(langs.like(f"{p}%"), langs.like(f"%,{p}%"))
+        for p in ("zh", "zho", "yue")
+    ))
+
+
 def _status_condition(status: str | None):
     if not status:
         return None
+    if status == "missing_zh":
+        # 缺中文 = 既无中文外挂字幕文件，也无中文内嵌轨。
+        return and_(~_has_chinese_subtitle(), ~_has_chinese_embedded())
     group = _STATUS_GROUPS.get(status)
     if group:
         return Video.status.in_(group)
