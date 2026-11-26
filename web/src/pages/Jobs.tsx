@@ -16,6 +16,9 @@ export default function Jobs({ push }: { push: ToastPush }) {
   const [decisions, setDecisions] = useState<Decision[]>([])
   const [live, setLive] = useState<{ state: string; progress: number; error_message: string | null } | null>(null)
   const closeStream = useRef<(() => void) | null>(null)
+  // 记录每个任务订阅开始时的状态与是否已提示，避免回看历史终态任务时反复弹提示。
+  const initialState = useRef<Map<number, string>>(new Map())
+  const notified = useRef<Set<number>>(new Set())
 
   const load = useCallback(async () => {
     try {
@@ -46,6 +49,10 @@ export default function Jobs({ push }: { push: ToastPush }) {
   function selectJob(id: number) {
     setActiveId(id); setDecisions([]); setLive(null)
     if (closeStream.current) closeStream.current()
+    // 订阅开始时若任务已是终态，说明是回看历史，不应把它当成"刚完成"来提示。
+    if (!initialState.current.has(id)) {
+      initialState.current.set(id, jobs?.find((j) => j.id === id)?.state || '')
+    }
     loadDecisions(id)
     closeStream.current = api.streamJob(id, (payload, type) => {
       if (type === 'job.decisions' && payload.items) {
@@ -63,7 +70,13 @@ export default function Jobs({ push }: { push: ToastPush }) {
       }))
       if (type === 'job.done') {
         load(); loadDecisions(id)
-        push(`任务 #${id} 已结束：${payload.state}`, payload.state === 'FAILED' ? 'error' : 'ok')
+        const started = initialState.current.get(id) || ''
+        const wasActive = started === 'PENDING' || started === 'RUNNING'
+        // 仅当任务确实从活跃态转为终态、且尚未提示过时弹一次。
+        if (wasActive && !notified.current.has(id)) {
+          notified.current.add(id)
+          push(`任务 #${id} 已结束：${payload.state}`, payload.state === 'FAILED' ? 'error' : 'ok')
+        }
       }
     }, () => { /* 流结束 */ })
   }

@@ -98,19 +98,27 @@ export const api = {
     onError?: (e: Event) => void,
   ): () => void {
     const source = new EventSource(`/api/jobs/${jobId}/events`)
+    let settled = false // 是否已收到终态；收到后主动关闭，避免 EventSource 自动重连重复推送
     const forward = (type: string) => (e: MessageEvent) => {
-      try { onEvent(JSON.parse(e.data), type) } catch { /* 忽略坏帧 */ }
+      try {
+        onEvent(JSON.parse(e.data), type)
+        if (type === 'job.done') {
+          settled = true
+          source.close()
+        }
+      } catch { /* 忽略坏帧 */ }
     }
     source.addEventListener('job.progress', forward('job.progress') as EventListener)
     source.addEventListener('job.decisions', forward('job.decisions') as EventListener)
     source.addEventListener('job.done', forward('job.done') as EventListener)
     source.addEventListener('error', (e) => {
+      if (settled) return // 主动关闭后的 error 无需处理
       if (e instanceof MessageEvent) {
         try { onEvent(JSON.parse(e.data), 'error') } catch { /* ignore */ }
       } else {
         onError?.(e)
       }
     })
-    return () => source.close()
+    return () => { settled = true; source.close() }
   },
 }
