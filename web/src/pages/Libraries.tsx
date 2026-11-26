@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import type { Library } from '../types'
 import { Badge, Card, Empty, ErrorBox, Spinner, useToasts } from '../components/ui'
+import FolderPicker from '../components/FolderPicker'
 
 type ToastPush = ReturnType<typeof useToasts>['push']
 type FormState = {
@@ -63,7 +64,7 @@ export default function Libraries({ push }: { push: ToastPush }) {
     setSaving(true)
     try {
       const r = await api.patch<Library>(`/api/libraries/${lib.id}`, {
-        name: editForm.name, scan_cron: editForm.scan_cron,
+        root_path: editForm.root_path, name: editForm.name, scan_cron: editForm.scan_cron,
         scan_depth: editForm.scan_depth, exclude_patterns: parsePatterns(editForm.exclude_text),
       })
       push(`${r.name || '媒体库'} 配置已保存`)
@@ -112,9 +113,9 @@ export default function Libraries({ push }: { push: ToastPush }) {
         <Card title="添加媒体库">
           <form onSubmit={create} className="form-grid">
             <label className="field full">
-              <span>根目录路径 <em>容器内路径，如 /media/tvshows</em></span>
-              <input value={form.root_path} onChange={(e) => setForm({ ...form, root_path: e.target.value })}
-                placeholder="/media/tvshows 或 Y:/tv/欧美剧" required />
+              <span>根目录路径 <em>可手动输入，也可点「浏览」选择服务端目录</em></span>
+              <FolderPicker value={form.root_path} onChange={(v) => setForm({ ...form, root_path: v })}
+                placeholder="/media/tvshows 或 Y:/tv/欧美剧" />
             </label>
             <label className="field">
               <span>名称</span>
@@ -176,6 +177,12 @@ export default function Libraries({ push }: { push: ToastPush }) {
                   <div className="lib-edit">
                     <div className="credential-hint">配置仅对当前媒体库生效，保存后下次扫描按新规则执行。</div>
                     <div className="form-grid">
+                      <label className="field full">
+                        <span>根目录路径 <em>可手动输入，也可点「浏览」选择服务端目录</em></span>
+                        <FolderPicker value={editForm.root_path}
+                          onChange={(v) => setEditForm({ ...editForm, root_path: v })}
+                          placeholder="/media/tvshows 或 Y:/tv/欧美剧" />
+                      </label>
                       <label className="field">
                         <span>名称</span>
                         <input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />

@@ -205,6 +205,51 @@ def test_library_crud_with_per_library_scan_config(client):
     assert client.patch("/api/libraries/999999", json={"name": "x"}).status_code == 404
 
 
+def test_browse_directories_lists_subdirs_only(client, tmp_path):
+    """目录浏览接口只返回子目录，支持返回父路径。"""
+    import os
+    client.post("/api/auth/login", json={"username": "admin", "password": "test-password-123"})
+
+    root = tmp_path / "media"
+    (root / "欧美剧").mkdir(parents=True)
+    (root / "电影").mkdir()
+    (root / "poster.jpg").touch()
+
+    resp = client.get("/api/libraries/browse", params={"path": str(root)})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert {d["name"] for d in body["dirs"]} == {"欧美剧", "电影"}
+    assert all("poster.jpg" not in d["path"] for d in body["dirs"])
+    assert body["current"] == str(root)
+    assert body["parent"] == str(tmp_path)
+    assert body["root"] is False
+
+    resp = client.get("/api/libraries/browse", params={"path": str(root / "欧美剧")})
+    assert resp.json()["parent"] == str(root)
+
+
+def test_browse_directories_root_and_errors(client, tmp_path):
+    """空路径返回根目录；不存在/非目录路径返回 400 可读错误。"""
+    client.post("/api/auth/login", json={"username": "admin", "password": "test-password-123"})
+
+    resp = client.get("/api/libraries/browse", params={"path": ""})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["root"] is True
+    assert body["parent"] is None
+    assert len(body["dirs"]) >= 1
+
+    resp = client.get("/api/libraries/browse", params={"path": str(tmp_path / "nope")})
+    assert resp.status_code == 400
+    assert "不存在" in resp.json()["detail"]
+
+    file_path = tmp_path / "file.txt"
+    file_path.touch()
+    resp = client.get("/api/libraries/browse", params={"path": str(file_path)})
+    assert resp.status_code == 400
+    assert "不是目录" in resp.json()["detail"]
+
+
 def test_library_scan_uses_per_library_config(client, monkeypatch):
     """扫描任务应把每库的深度/排除规则传给 orchestrator。"""
     from subangler.worker import tasks

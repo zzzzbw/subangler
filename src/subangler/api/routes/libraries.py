@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import string
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 
@@ -58,11 +61,60 @@ class LibraryCreate(BaseModel):
 
 
 class LibraryUpdate(BaseModel):
+    root_path: str | None = None
     name: str | None = None
     scan_cron: str | None = None
     scan_depth: int | None = None
     exclude_patterns: list[str] | None = None
     enabled: bool | None = None
+
+
+@router.get("/browse")
+def browse_directories(path: str = Query(default="")) -> dict:
+    """列出目录下的子目录，供媒体库路径选择组件使用。
+
+    - path 为空：Windows 返回所有可用盘符，POSIX 返回根目录。
+    - 仅返回目录（不列文件），按名称排序。
+    - 路径不存在 / 不是目录 / 无权限：返回 400 + 可读错误。
+    """
+    raw = path.strip()
+    if not raw:
+        if os.name == "nt":
+            drives = []
+            for letter in string.ascii_uppercase:
+                drive = f"{letter}:\\"
+                try:
+                    if os.path.isdir(drive):
+                        drives.append({"name": drive, "path": drive})
+                except OSError:
+                    continue
+            return {"current": "", "parent": None, "dirs": drives, "root": True}
+        return {"current": "/", "parent": None, "dirs": [{"name": "/", "path": "/"}], "root": True}
+
+    target = Path(os.path.expanduser(os.path.normpath(raw)))
+    if not target.exists():
+        raise HTTPException(status_code=400, detail=f"路径不存在：{raw}")
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail=f"不是目录：{raw}")
+
+    parent = target.parent
+    # 盘符根（C:\）与 POSIX 根的 parent 是自身，视为根；UNC 共享根允许回到上一层。
+    is_root = parent == target
+    try:
+        dirs = [
+            {"name": child.name, "path": str(child)}
+            for child in sorted(target.iterdir(), key=lambda p: p.name.lower())
+            if child.is_dir()
+        ]
+    except (OSError, PermissionError) as exc:
+        raise HTTPException(status_code=400, detail=f"无法读取目录：{exc}") from exc
+
+    return {
+        "current": str(target),
+        "parent": None if is_root else str(parent),
+        "dirs": dirs,
+        "root": is_root,
+    }
 
 
 @router.get("")
@@ -100,6 +152,14 @@ def update_library(library_id: int, payload: LibraryUpdate) -> dict:
         if not lib:
             raise HTTPException(status_code=404, detail="媒体库不存在")
         data = payload.model_dump(exclude_unset=True)
+        if data.get("root_path"):
+            duplicate = session.execute(
+                select(MediaLibrary).where(
+                    MediaLibrary.root_path == data["root_path"], MediaLibrary.id != library_id
+                )
+            ).scalar_one_or_none()
+            if duplicate:
+                raise HTTPException(status_code=409, detail="媒体库路径已存在")
         if "exclude_patterns" in data:
             data["exclude_patterns"] = json.dumps(data["exclude_patterns"] or [], ensure_ascii=False)
         for key, value in data.items():
