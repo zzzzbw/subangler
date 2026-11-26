@@ -2,11 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import type { Video, Library } from '../types'
-import { Badge, Card, Empty, ErrorBox, Spinner, langLabel, useToasts } from '../components/ui'
+import { Badge, Card, Empty, ErrorBox, Spinner, hasLanguage, langLabel, langMatches, useToasts } from '../components/ui'
 
 type ToastPush = ReturnType<typeof useToasts>['push']
 
-type StatusFilter = 'all' | 'missing_zh' | 'has_subtitle' | 'embedded' | 'external' | 'needs_attention'
+type StatusFilter = 'all' | 'missing_any' | 'missing_zh' | 'has_subtitle' | 'embedded' | 'external' | 'needs_attention'
 const PAGE_SIZES = [20, 50, 100, 200]
 
 export default function Videos({ push }: { push: ToastPush }) {
@@ -204,11 +204,12 @@ function VideoRow({ video, langs, selected, focused, onToggle, push, onChanged }
     finally { setBusy(false) }
   }
 
-  const missingLangs = langs.filter((l) => !video.subtitles.some((s) => s.language === l || s.language.startsWith(l)))
+  // 下载按钮口径与首页统计一致：外挂文件或内嵌轨任一命中即视为已有该语言。
+  const missingLangs = langs.filter((l) => !hasLanguage(video, l))
   // 内嵌轨（MediaInfo 探测）与外挂字幕文件是两回事：外挂优先展示，内嵌单独标注。
   const embeddedLangs = (video.embedded_langs || '').split(',').map((s) => s.trim()).filter(Boolean)
-  const hasEmbedded = (l: string) => embeddedLangs.some((e) => e === l || e.startsWith(l))
-  const extraEmbedded = embeddedLangs.filter((e) => !langs.some((l) => e === l || e.startsWith(l)))
+  const hasEmbedded = (l: string) => embeddedLangs.some((e) => langMatches(e, l))
+  const extraEmbedded = embeddedLangs.filter((e) => !langs.some((l) => langMatches(e, l)))
   const statusTone = video.status === 'has_subtitle' ? 'ok'
     : video.status === 'embedded_subtitle' ? 'ok'
       : video.status === 'needs_attention' || video.status === 'failed' ? 'error'
@@ -224,7 +225,7 @@ function VideoRow({ video, langs, selected, focused, onToggle, push, onChanged }
       <span className="col-status"><Badge tone={statusTone}>{statusLabel(video.status)}</Badge></span>
       <span className="col-langs">
         {langs.map((l) => {
-          const sub = video.subtitles.find((s) => s.language === l || s.language.startsWith(l))
+          const sub = video.subtitles.find((s) => langMatches(s.language, l))
           if (sub) return <Badge key={l} tone={sub.is_manual ? 'accent' : 'ok'}
             title={sub.is_manual ? '人工安装的外挂字幕文件' : '自动下载的外挂字幕文件'}>
             {langLabel(l)}·外挂{sub.is_manual ? '·人工' : ''}

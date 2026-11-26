@@ -28,31 +28,38 @@ def _ctx() -> TaskContext:
     return TaskContext(db_path=str(store.db_path), config_store=store)
 
 
-def _has_chinese_subtitle():
-    """外挂中文字幕文件（zh 前缀，含 zh-CN/zh_Hant，以及 zho/yue）。"""
-    return exists(
-        select(Subtitle.id).where(
-            Subtitle.video_id == Video.id,
-            or_(Subtitle.language.like("zh%"), Subtitle.language.in_(("zho", "yue"))),
-        )
-    )
+def _has_subtitle_lang(lang: str):
+    """外挂字幕文件：语言代码以 lang 开头；zh 另兼容 zho/yue。"""
+    terms = [Subtitle.language.like(f"{lang}%")]
+    if lang == "zh":
+        terms.append(Subtitle.language.in_(("zho", "yue")))
+    return exists(select(Subtitle.id).where(Subtitle.video_id == Video.id, or_(*terms)))
 
 
-def _has_chinese_embedded():
-    """内嵌中文字幕轨：embedded_langs 是以逗号分隔的语言代码，token 以 zh/zho/yue 开头。"""
+def _has_embedded_lang(lang: str):
+    """内嵌字幕轨：embedded_langs 逗号分隔，token 以 lang 开头；zh 另兼容 zho/yue。"""
     langs = func.coalesce(Video.embedded_langs, "")
+    prefixes = ("zh", "zho", "yue") if lang == "zh" else (lang,)
     return or_(*(
         or_(langs.like(f"{p}%"), langs.like(f"%,{p}%"))
-        for p in ("zh", "zho", "yue")
+        for p in prefixes
     ))
 
 
-def _status_condition(status: str | None):
+def _missing_lang_condition(lang: str):
+    """缺某语言 = 既无该语言外挂字幕文件，也无该语言内嵌轨。"""
+    return and_(~_has_subtitle_lang(lang), ~_has_embedded_lang(lang))
+
+
+def _status_condition(status: str | None, languages: list[str] | None = None):
     if not status:
         return None
     if status == "missing_zh":
-        # 缺中文 = 既无中文外挂字幕文件，也无中文内嵌轨。
-        return and_(~_has_chinese_subtitle(), ~_has_chinese_embedded())
+        return _missing_lang_condition("zh")
+    if status == "missing_any":
+        # 缺字幕 = 缺任一配置语言（首页统计下钻用）。
+        langs = languages or ["zh", "en"]
+        return or_(*(_missing_lang_condition(lang) for lang in langs))
     group = _STATUS_GROUPS.get(status)
     if group:
         return Video.status.in_(group)
@@ -77,10 +84,11 @@ def list_videos(
     ctx = _ctx()
     keyword = (q or "").strip()
     size = limit or page_size
+    languages = list(ctx.config_store.get("general.languages") or ["zh", "en"])
     conditions = []
     if library_id:
         conditions.append(Video.library_id == library_id)
-    status_cond = _status_condition(status)
+    status_cond = _status_condition(status, languages)
     if status_cond is not None:
         conditions.append(status_cond)
     if keyword:

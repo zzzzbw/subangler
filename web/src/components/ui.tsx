@@ -1,5 +1,6 @@
 // 通用 UI 小组件：徽标、状态点、卡片、加载/空态、Toast。
 import { useEffect, useState, type ReactNode } from 'react'
+import type { Video } from '../types'
 
 export function Badge({ children, tone = 'default', title }: { children: ReactNode; tone?: string; title?: string }) {
   return <span className={`badge badge-${tone}`} title={title}>{children}</span>
@@ -88,6 +89,20 @@ export function humanizeReason(reason: string | null | undefined): string {
   if (/embedded|内嵌/i.test(r)) return '视频已有内嵌字幕，已按设置跳过'
   if (/skip|已有|has_subtitle/i.test(r)) return '已存在字幕，按设置跳过'
   return r
+}
+
+/** 语言代码是否匹配：支持 zh 兼容 zho/yue，与后端 missing_zh 筛选口径一致。 */
+export function langMatches(code: string, lang: string): boolean {
+  if (code === lang || code.startsWith(lang)) return true
+  if (lang === 'zh' && (code === 'zho' || code === 'yue' || code.startsWith('zho') || code.startsWith('yue'))) return true
+  return false
+}
+
+/** 视频是否拥有某语言字幕：外挂字幕文件 或 内嵌字幕轨任一命中即算有。 */
+export function hasLanguage(video: Video, lang: string): boolean {
+  if (video.subtitles.some((s) => langMatches(s.language, lang))) return true
+  const embedded = (video.embedded_langs || '').split(',').map((s) => s.trim()).filter(Boolean)
+  return embedded.some((e) => langMatches(e, lang))
 }
 
 export function langLabel(code: string): string {

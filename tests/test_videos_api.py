@@ -109,6 +109,17 @@ def test_missing_chinese_filter(client_and_ctx):
     assert "/media/ExternalZH.mkv" not in paths
 
 
+def test_missing_any_filter(client_and_ctx):
+    client = client_and_ctx
+    # 缺任一配置语言(zh/en)：两条中文齐全的样本应被排除，其余 5 条命中
+    r = client.get("/api/videos?status=missing_any").json()
+    assert r["total"] == 5
+    # 逐条核对两条齐全样本不在结果里（用分页取全）
+    all_paths = [v["path"] for v in client.get("/api/videos?status=missing_any&page_size=100").json()["items"]]
+    assert "/media/EmbeddedZH.mkv" not in all_paths
+    assert "/media/ExternalZH.mkv" not in all_paths
+
+
 def test_legacy_limit_param(client_and_ctx):
     client = client_and_ctx
     r = client.get("/api/videos?limit=2").json()

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import type { Video, ProviderItem, HealthReport, ConfigItem } from '../types'
-import { Badge, Card, Dot, Empty, ErrorBox, Spinner, humanizeReason, langLabel, usePolling, useToasts } from '../components/ui'
+import { Badge, Card, Dot, Empty, ErrorBox, Spinner, hasLanguage, humanizeReason, langLabel, usePolling, useToasts } from '../components/ui'
 
 type ToastPush = ReturnType<typeof useToasts>['push']
 
@@ -36,14 +36,16 @@ export default function Dashboard({ push }: { push: ToastPush }) {
 
   if (videos === null) return error ? <ErrorBox message={error} onRetry={load} /> : <Spinner />
 
-  const missing = videos.filter((v) => isMissing(v))
-  const hasSub = videos.filter((v) => v.status === 'has_subtitle')
+  // 统一口径：外挂字幕文件或内嵌字幕轨任一命中即视为已有该语言。
+  // 缺失中文 = 既无中文外挂字幕、也无中文内嵌轨；覆盖率 = 至少有一种配置语言字幕；语言缺口按语言统计。
+  const missingZh = videos.filter((v) => !hasLanguage(v, 'zh'))
+  // 字幕异常 = 自动下载彻底失败的剧集（needs_attention / failed），由下载任务回写状态。
+  const abnormal = videos.filter((v) => v.status === 'needs_attention' || v.status === 'failed')
+  const hasSub = videos.filter((v) => languages.some((lang) => hasLanguage(v, lang)))
   const byLang: Record<string, number> = {}
   for (const v of videos) {
     for (const lang of languages) {
-      if (!v.subtitles.some((s) => s.language === lang || s.language.startsWith(lang))) {
-        byLang[lang] = (byLang[lang] || 0) + 1
-      }
+      if (!hasLanguage(v, lang)) byLang[lang] = (byLang[lang] || 0) + 1
     }
   }
   const coverage = videos.length ? Math.round((hasSub.length / videos.length) * 100) : 0
@@ -78,8 +80,8 @@ export default function Dashboard({ push }: { push: ToastPush }) {
 
       <div className="stat-grid">
         <StatCard label="视频总数" value={videos.length} tone="accent" sub={`${hasSub.length} 集已有字幕`} />
-        <StatCard label="缺字幕" value={missing.length} tone={missing.length ? 'warn' : 'ok'} sub="需要下载或人工处理" to="/videos?status=missing" />
-        <StatCard label="覆盖率" value={`${coverage}%`} tone={coverage >= 80 ? 'ok' : 'warn'} sub="至少有一种字幕" />
+        <StatCard label="缺失中文字幕" value={missingZh.length} tone={missingZh.length ? 'warn' : 'ok'} sub="无中文外挂或内嵌字幕" to="/videos?status=missing_zh" />
+        <StatCard label="覆盖率" value={`${coverage}%`} tone={coverage >= 80 ? 'ok' : 'warn'} sub="至少有一种配置语言字幕" />
         <StatCard label="可用字幕源" value={`${enabledProviders.length}/${providers.length}`} tone={enabledProviders.length ? 'ok' : 'error'} sub={`${brokenProviders.length} 个异常`} to="/providers" />
       </div>
 
@@ -121,11 +123,11 @@ export default function Dashboard({ push }: { push: ToastPush }) {
         </Card>
       </div>
 
-      <Card title="最需要关注的剧集" subtitle="缺字幕的剧集，点击前往下载"
-        actions={<Link className="link" to="/videos">全部剧集 →</Link>}>
-        {missing.length === 0 ? <Empty text="没有缺字幕的剧集" hint="扫描媒体库后会在此显示" /> : (
+      <Card title="字幕异常的剧集" subtitle="自动下载失败的剧集，点击前往处理"
+        actions={<Link className="link" to="/videos?status=needs_attention">全部异常 →</Link>}>
+        {abnormal.length === 0 ? <Empty text="没有字幕异常的剧集" hint="下载失败后会自动出现在这里" /> : (
           <div className="video-mini-list">
-            {missing.slice(0, 6).map((v) => (
+            {abnormal.slice(0, 6).map((v) => (
               <Link key={v.id} to={`/videos?video=${v.id}`} className="video-mini">
                 <div className="video-mini-title">{v.title || shortName(v.path)} {v.season && <Badge tone="muted">S{v.season}{v.episode ? `E${v.episode}` : ''}</Badge>}</div>
                 <div className="video-mini-sub">{shortName(v.path)}</div>
@@ -149,11 +151,6 @@ function StatCard({ label, value, sub, tone, to }: {
     </>
   )
   return to ? <Link className="stat-card link-card" to={to}>{inner}</Link> : <div className="stat-card">{inner}</div>
-}
-
-function isMissing(v: Video): boolean {
-  if (v.status === 'has_subtitle' || v.status === 'skipped') return false
-  return v.status === 'missing' || v.status === 'pending' || v.status === 'needs_attention'
 }
 
 function shortName(path: string): string {
