@@ -16,8 +16,13 @@ NAS 拉取镜像启动容器
 
 ## 第一步：准备 Docker Hub 凭证
 
-1. 注册/登录 [Docker Hub](https://hub.docker.com)，记住用户名（下称 `<用户名>`）。
-2. 创建 Access Token：Account Settings → Security → New Access Token，权限选 **Read, Write, Delete**，复制保存（只显示一次）。
+1. 注册/登录 [Docker Hub](https://hub.docker.com)。右上角头像旁显示的就是你的 **用户名（Docker ID）**，即下文的 `<用户名>`。
+2. 创建 Access Token（个人访问令牌，PAT）：点头像 → **Account settings** → 左侧 **Personal access tokens** → **Generate new token**，按提示填写：
+   - Description：填个便于识别的名字，如 `subangler-github-actions`
+   - Expiration date：可选，留空为永不过期；想更安全可设 90 天
+   - Access permissions → Repository permission：选 **Repo Read & Write**（推送镜像需要写权限，删除权限用不到）
+   - 点 **Generate** 后立即复制 token 保存——**只显示一次，离开页面无法找回**
+   - 前提：Docker Hub 账号邮箱已验证，否则无法创建令牌
 3. 在 GitHub 仓库 `zzzzbw/subangler` → Settings → Secrets and variables → Actions，添加两个 Secret：
    - `DOCKERHUB_USERNAME` = 你的 Docker Hub 用户名
    - `DOCKERHUB_TOKEN` = 上一步生成的 Access Token
