@@ -23,17 +23,17 @@ NAS 拉取镜像启动容器
    - Access permissions → Repository permission：选 **Repo Read & Write**（推送镜像需要写权限，删除权限用不到）
    - 点 **Generate** 后立即复制 token 保存——**只显示一次，离开页面无法找回**
    - 前提：Docker Hub 账号邮箱已验证，否则无法创建令牌
-3. 在 GitHub 仓库 `zzzzbw/subangler` → Settings → Secrets and variables → Actions，添加两个 Secret：
-   - `DOCKERHUB_USERNAME` = 你的 Docker Hub 用户名
+3. 在 GitHub 仓库 `Zzzzbw/subangler` → Settings → Secrets and variables → Actions，添加两个 Secret：
+   - `DOCKERHUB_USERNAME` = `zzzzbw`
    - `DOCKERHUB_TOKEN` = 上一步生成的 Access Token
 
-> 镜像推送到 `<用户名>/subangler`，因此 Secrets 里的用户名要与部署时镜像地址一致。
+> 镜像推送到 `zzzzbw/subangler`，因此 Secrets 里的用户名要与部署时镜像地址一致。
 > 若不想用主账号，可在 Docker Hub 建一个公开仓库 `subangler`，用专门 token 推送。
 
 也可以用 `gh` 命令行添加（在本项目目录执行）：
 
 ```bash
-gh secret set DOCKERHUB_USERNAME --body "你的用户名"
+gh secret set DOCKERHUB_USERNAME --body "zzzzbw"
 gh secret set DOCKERHUB_TOKEN --body "你的token"
 ```
 
@@ -59,7 +59,7 @@ GitHub 仓库 → Actions → 「构建并推送 Docker 镜像」→ Run workflo
 ## 第三步：NAS 上部署
 
 1. 在 NAS 上创建部署目录，如 `/volume1/docker/subangler`。
-2. 把本仓库的 `docker-compose.nas.yml` 复制过去，将其中 `<你的DockerHub用户名>` 替换为实际用户名。
+2. 把本仓库的 `docker-compose.nas.yml` 复制过去（镜像地址已填好为 `zzzzbw/subangler:latest`，无需修改）。
 3. 在同目录创建 `.env`：
 
 ```ini

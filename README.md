@@ -117,14 +117,14 @@ npm run build                     # 类型检查 + 构建 → ../src/subangler/s
 推荐用现成镜像部署，NAS 上无需源码和本地构建：
 
 ```bash
-# 1. 复制 docker-compose.nas.yml，把其中 <你的DockerHub用户名> 换成实际用户名
+# 1. 复制 docker-compose.nas.yml（已填好镜像地址 zzzzbw/subangler:latest）
 # 2. 同目录创建 .env：ADMIN_PASSWORD / MEDIA_ROOT / PUID / PGID
 docker compose -f docker-compose.nas.yml up -d
 ```
 
 访问 `http://<nas-ip>:8765` 登录，在媒体库页添加目录（容器内 `/media/tvshows`）并设置逐库扫描规则，在字幕源页填写凭证。
 
-镜像由 GitHub Actions 自动构建（amd64 + arm64），推送到 Docker Hub 的 `<用户名>/subangler`，带 `latest` 和版本号两个标签。想自己构建或更新镜像、配置 Docker Hub 凭证、以及ARM/权限等常见问题，见 **`docs/NAS部署指南.md`**。
+镜像由 GitHub Actions 自动构建（amd64 + arm64），推送到 Docker Hub 的 `zzzzbw/subangler`，带 `latest` 和版本号两个标签。想自己构建或更新镜像、配置 Docker Hub 凭证、以及ARM/权限等常见问题，见 **`docs/NAS部署指南.md`**。
 
 本地开发想用源码构建时，仍可用根目录的 `docker-compose.yml`（`build: .`）。镜像内置 ffmpeg / libmediainfo；媒体库目录必须可写并以 PUID/PGID 对齐属主；公网暴露务必配反代 + HTTPS。
 

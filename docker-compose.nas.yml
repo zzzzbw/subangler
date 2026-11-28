@@ -1,8 +1,7 @@
 # NAS 部署：直接拉取 Docker Hub 镜像，无需本地构建。
-# 部署前把下方 image 中的 <你的DockerHub用户名> 替换为实际用户名。
 services:
   subangler:
-    image: <你的DockerHub用户名>/subangler:latest
+    image: zzzzbw/subangler:latest
     container_name: subangler
     restart: unless-stopped
     ports:
